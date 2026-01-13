@@ -1,0 +1,113 @@
+"""Document-related schemas."""
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+from evidence_repository.schemas.common import BaseSchema
+
+
+class DocumentCreate(BaseModel):
+    """Request schema for document creation (metadata only, file sent separately)."""
+
+    metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Custom document metadata"
+    )
+
+
+class DocumentVersionResponse(BaseSchema):
+    """Response schema for document version."""
+
+    id: UUID = Field(..., description="Version ID")
+    document_id: UUID = Field(..., description="Parent document ID")
+    version_number: int = Field(..., description="Version number")
+    file_size: int = Field(..., description="File size in bytes")
+    file_hash: str = Field(..., description="SHA-256 hash of file content")
+    extraction_status: str = Field(..., description="Text extraction status")
+    extraction_error: str | None = Field(
+        default=None, description="Extraction error message if failed"
+    )
+    extracted_at: datetime | None = Field(
+        default=None, description="When extraction completed"
+    )
+    page_count: int | None = Field(
+        default=None, description="Number of pages (for PDFs)"
+    )
+    created_at: datetime = Field(..., description="Version creation timestamp")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Version metadata",
+        alias="metadata_",
+    )
+
+
+class DocumentResponse(BaseSchema):
+    """Response schema for document."""
+
+    id: UUID = Field(..., description="Document ID")
+    filename: str = Field(..., description="Storage filename")
+    original_filename: str = Field(..., description="Original uploaded filename")
+    content_type: str = Field(..., description="MIME type")
+    file_hash: str | None = Field(
+        default=None, description="SHA-256 hash for deduplication"
+    )
+    created_at: datetime = Field(..., description="Document creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    deleted_at: datetime | None = Field(
+        default=None, description="Soft deletion timestamp"
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Document metadata",
+        alias="metadata_",
+    )
+
+    # Include latest version info
+    latest_version: DocumentVersionResponse | None = Field(
+        default=None, description="Latest document version"
+    )
+
+
+class DocumentListResponse(BaseSchema):
+    """Response schema for document list item (lighter than full response)."""
+
+    id: UUID
+    filename: str
+    original_filename: str
+    content_type: str
+    created_at: datetime
+    updated_at: datetime
+    version_count: int = Field(default=0, description="Number of versions")
+    latest_extraction_status: str | None = Field(
+        default=None, description="Extraction status of latest version"
+    )
+
+
+class ExtractionTriggerResponse(BaseModel):
+    """Response after triggering extraction."""
+
+    document_id: UUID = Field(..., description="Document ID")
+    version_id: UUID = Field(..., description="Version being extracted")
+    status: str = Field(..., description="Extraction status")
+    message: str = Field(..., description="Status message")
+
+
+class DocumentUploadResponse(BaseModel):
+    """Response after uploading a document (async processing)."""
+
+    document_id: UUID = Field(..., description="Document ID")
+    version_id: UUID = Field(..., description="Version ID created")
+    job_id: str = Field(..., description="Job ID for tracking processing status")
+    message: str = Field(default="Document queued for processing", description="Status message")
+
+
+class VersionUploadResponse(BaseModel):
+    """Response after uploading a new document version (async processing)."""
+
+    document_id: UUID = Field(..., description="Parent document ID")
+    version_id: UUID = Field(..., description="New version ID")
+    version_number: int = Field(..., description="Version number")
+    job_id: str = Field(..., description="Job ID for tracking processing status")
+    message: str = Field(default="Version queued for processing", description="Status message")

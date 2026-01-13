@@ -280,12 +280,19 @@ def task_extract_document(
 def task_embed_document(
     document_id: str,
     version_id: str | None = None,
+    embed_spans: bool = True,
+    reprocess: bool = False,
 ) -> dict:
     """Generate embeddings for a document.
+
+    Embeds text spans first if available, otherwise falls back to text chunking.
+    Only embeds text-type spans (TEXT, HEADING, CITATION, FOOTNOTE).
 
     Args:
         document_id: Document ID.
         version_id: Optional specific version ID.
+        embed_spans: If True, embed spans first (default). If False, use text chunking.
+        reprocess: If True, delete existing embeddings before generating new ones.
 
     Returns:
         Dict with embedding results.
@@ -296,9 +303,13 @@ def task_embed_document(
     from evidence_repository.embeddings.chunker import TextChunker
     from evidence_repository.embeddings.openai_client import OpenAIEmbeddingClient
     from evidence_repository.models.embedding import EmbeddingChunk
+    from evidence_repository.models.evidence import Span, SpanType
 
     settings = get_settings()
     db = _get_sync_db_session()
+
+    # Embeddable span types (text-based spans only)
+    EMBEDDABLE_SPAN_TYPES = {SpanType.TEXT, SpanType.HEADING, SpanType.CITATION, SpanType.FOOTNOTE}
 
     try:
         # Get version with extracted text
@@ -318,10 +329,41 @@ def task_embed_document(
         if not version:
             raise ValueError(f"No version found for document {document_id}")
 
-        if not version.extracted_text:
-            raise ValueError(f"Document {document_id} has no extracted text")
+        _update_progress(10, "Found document version")
 
-        _update_progress(10, "Found document with extracted text")
+        # Delete existing embeddings if reprocessing
+        if reprocess:
+            deleted = db.execute(
+                EmbeddingChunk.__table__.delete().where(
+                    EmbeddingChunk.document_version_id == version.id
+                )
+            )
+            db.flush()
+            logger.info(f"Deleted existing embeddings for version {version.id}")
+
+        # Try to embed spans first
+        if embed_spans:
+            spans = db.execute(
+                select(Span)
+                .where(
+                    Span.document_version_id == version.id,
+                    Span.span_type.in_(EMBEDDABLE_SPAN_TYPES),
+                )
+                .order_by(Span.created_at)
+            ).scalars().all()
+
+            if spans:
+                _update_progress(15, f"Found {len(spans)} text spans to embed")
+                result = _embed_spans_sync(db, version, list(spans), reprocess)
+                db.commit()
+                _update_progress(100, "Span embeddings completed")
+                return result
+
+        # Fall back to text chunking if no spans or embed_spans=False
+        if not version.extracted_text:
+            raise ValueError(f"Document {document_id} has no extracted text and no spans")
+
+        _update_progress(20, "No spans found, falling back to text chunking")
 
         # Chunk the text
         chunker = TextChunker(
@@ -329,13 +371,14 @@ def task_embed_document(
             chunk_overlap=settings.chunk_overlap,
         )
         chunks = chunker.chunk_text(version.extracted_text)
-        _update_progress(20, f"Created {len(chunks)} text chunks")
+        _update_progress(30, f"Created {len(chunks)} text chunks")
 
         if not chunks:
             return {
                 "document_id": document_id,
                 "version_id": str(version.id),
                 "chunks_created": 0,
+                "mode": "chunking",
             }
 
         # Generate embeddings using synchronous approach
@@ -352,12 +395,14 @@ def task_embed_document(
 
         _update_progress(70, "Generated embeddings")
 
-        # Delete existing embeddings for this version
-        db.execute(
-            EmbeddingChunk.__table__.delete().where(
-                EmbeddingChunk.document_version_id == version.id
+        # Delete existing non-span embeddings for this version (if not already done)
+        if not reprocess:
+            db.execute(
+                EmbeddingChunk.__table__.delete().where(
+                    EmbeddingChunk.document_version_id == version.id,
+                    EmbeddingChunk.span_id.is_(None),  # Only delete chunk-based embeddings
+                )
             )
-        )
 
         # Store embedding chunks
         for chunk, embedding in zip(chunks, embeddings):
@@ -379,11 +424,177 @@ def task_embed_document(
             "document_id": document_id,
             "version_id": str(version.id),
             "chunks_created": len(chunks),
+            "mode": "chunking",
         }
 
     except Exception as e:
         db.rollback()
         logger.error(f"Embedding generation failed for {document_id}: {e}")
+        raise
+    finally:
+        db.close()
+
+
+def _embed_spans_sync(
+    db: Session,
+    version: DocumentVersion,
+    spans: list,
+    reprocess: bool = False,
+) -> dict:
+    """Embed spans synchronously with retry logic.
+
+    Args:
+        db: Database session.
+        version: Document version.
+        spans: List of Span objects to embed.
+        reprocess: If True, re-embed existing spans.
+
+    Returns:
+        Dict with embedding results.
+    """
+    from evidence_repository.embeddings.openai_client import OpenAIEmbeddingClient
+    from evidence_repository.models.embedding import EmbeddingChunk
+
+    BATCH_SIZE = 50
+
+    # Filter spans with content and check for existing embeddings
+    valid_spans = []
+    existing_span_ids: set = set()
+
+    if not reprocess:
+        # Check which spans already have embeddings
+        span_ids = [s.id for s in spans]
+        result = db.execute(
+            select(EmbeddingChunk.span_id)
+            .where(EmbeddingChunk.span_id.in_(span_ids))
+        )
+        existing_span_ids = {row[0] for row in result.fetchall()}
+
+    for span in spans:
+        if span.id in existing_span_ids:
+            continue
+        if not span.text_content or not span.text_content.strip():
+            continue
+        valid_spans.append(span)
+
+    if not valid_spans:
+        return {
+            "document_id": str(version.document_id),
+            "version_id": str(version.id),
+            "spans_embedded": 0,
+            "spans_skipped": len(spans),
+            "mode": "spans",
+        }
+
+    # Generate embeddings in batches
+    client = OpenAIEmbeddingClient()
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    all_chunks = []
+
+    try:
+        for batch_start in range(0, len(valid_spans), BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, len(valid_spans))
+            batch_spans = valid_spans[batch_start:batch_end]
+
+            # Progress update
+            progress = 15 + ((batch_start / len(valid_spans)) * 70)
+            _update_progress(progress, f"Embedding batch {batch_start // BATCH_SIZE + 1}")
+
+            # Generate embeddings
+            texts = [s.text_content for s in batch_spans]
+            embeddings = loop.run_until_complete(client.embed_texts(texts))
+
+            # Create embedding chunks
+            for span, embedding, idx in zip(batch_spans, embeddings, range(len(batch_spans))):
+                chunk = EmbeddingChunk(
+                    document_version_id=version.id,
+                    span_id=span.id,
+                    chunk_index=idx,
+                    text=span.text_content,
+                    embedding=embedding,
+                    metadata_={
+                        "span_type": span.span_type.value,
+                        "span_hash": span.span_hash,
+                        "locator": span.start_locator,
+                    },
+                )
+                db.add(chunk)
+                all_chunks.append(chunk)
+
+    finally:
+        loop.close()
+
+    logger.info(
+        f"Created {len(all_chunks)} span embeddings for version {version.id} "
+        f"(tokens used: {client.get_token_usage()})"
+    )
+
+    return {
+        "document_id": str(version.document_id),
+        "version_id": str(version.id),
+        "spans_embedded": len(all_chunks),
+        "spans_skipped": len(spans) - len(valid_spans),
+        "tokens_used": client.get_token_usage(),
+        "mode": "spans",
+    }
+
+
+def task_reembed_version(version_id: str) -> dict:
+    """Re-embed all spans for a document version.
+
+    Deletes existing embeddings and regenerates them.
+
+    Args:
+        version_id: Document version ID.
+
+    Returns:
+        Dict with re-embedding results.
+    """
+    _update_progress(0, "Starting re-embedding")
+
+    from evidence_repository.models.embedding import EmbeddingChunk
+
+    db = _get_sync_db_session()
+
+    try:
+        ver_uuid = uuid.UUID(version_id)
+
+        # Get version
+        version = db.execute(
+            select(DocumentVersion).where(DocumentVersion.id == ver_uuid)
+        ).scalar_one_or_none()
+
+        if not version:
+            raise ValueError(f"Version {version_id} not found")
+
+        # Delete existing embeddings
+        deleted = db.execute(
+            EmbeddingChunk.__table__.delete().where(
+                EmbeddingChunk.document_version_id == ver_uuid
+            )
+        )
+        deleted_count = deleted.rowcount
+        db.flush()
+
+        _update_progress(20, f"Deleted {deleted_count} existing embeddings")
+
+        # Re-embed using the main embed function
+        result = task_embed_document(
+            document_id=str(version.document_id),
+            version_id=version_id,
+            embed_spans=True,
+            reprocess=True,
+        )
+
+        result["deleted_embeddings"] = deleted_count
+        return result
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Re-embedding failed for version {version_id}: {e}")
         raise
     finally:
         db.close()
@@ -1198,3 +1409,1181 @@ def _attach_to_project(
         )
         db.add(project_doc)
         db.flush()
+
+
+# =============================================================================
+# Structured Extraction Tasks
+# =============================================================================
+
+
+def task_extract_structured(
+    document_id: str,
+    project_id: str,
+    version_id: str | None = None,
+    reprocess: bool = False,
+) -> dict:
+    """Extract structured metrics and claims from a document.
+
+    Uses LLM-based extraction to identify Juris-critical facts:
+    - Metrics: ARR, Revenue, Burn, Runway, Cash, Headcount, Churn, NRR
+    - Claims: SOC2, ISO27001, GDPR, IP ownership, security incidents
+
+    All extractions reference source span_ids for traceability.
+
+    Args:
+        document_id: Document ID to extract from.
+        project_id: Project to associate extractions with.
+        version_id: Optional specific version (defaults to latest).
+        reprocess: If True, delete existing extractions first.
+
+    Returns:
+        Dict with extraction results.
+    """
+    _update_progress(0, "Starting structured extraction")
+
+    from evidence_repository.extraction.structured_extraction import (
+        StructuredExtractionService,
+    )
+    from evidence_repository.models.evidence import Span
+
+    db = _get_sync_db_session()
+
+    try:
+        doc_uuid = uuid.UUID(document_id)
+        proj_uuid = uuid.UUID(project_id)
+
+        # Get document version
+        if version_id:
+            version = db.execute(
+                select(DocumentVersion).where(DocumentVersion.id == uuid.UUID(version_id))
+            ).scalar_one_or_none()
+        else:
+            version = db.execute(
+                select(DocumentVersion)
+                .where(DocumentVersion.document_id == doc_uuid)
+                .order_by(DocumentVersion.version_number.desc())
+            ).scalars().first()
+
+        if not version:
+            raise ValueError(f"No version found for document {document_id}")
+
+        _update_progress(10, "Found document version")
+
+        # Check for spans
+        spans_count = db.execute(
+            select(Span.id).where(Span.document_version_id == version.id)
+        ).fetchall()
+
+        if not spans_count:
+            return {
+                "document_id": document_id,
+                "project_id": project_id,
+                "version_id": str(version.id),
+                "status": "no_spans",
+                "message": "No spans found for extraction. Run span generation first.",
+            }
+
+        _update_progress(20, f"Found {len(spans_count)} spans to process")
+
+        # Run extraction synchronously
+        import asyncio
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.orm import sessionmaker
+
+        settings = get_settings()
+
+        async def run_extraction():
+            engine = create_async_engine(settings.database_url)
+            async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+            async with async_session() as session:
+                service = StructuredExtractionService(db=session)
+                stats = await service.extract_from_version(
+                    version_id=version.id,
+                    project_id=proj_uuid,
+                    reprocess=reprocess,
+                )
+                await session.commit()
+                return stats
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            stats = loop.run_until_complete(run_extraction())
+        finally:
+            loop.close()
+
+        _update_progress(100, "Structured extraction complete")
+
+        return {
+            "document_id": document_id,
+            "project_id": project_id,
+            "version_id": str(version.id),
+            "status": "completed",
+            "spans_processed": stats.spans_processed,
+            "metrics_extracted": stats.metrics_extracted,
+            "claims_extracted": stats.claims_extracted,
+            "errors": stats.errors,
+        }
+
+    except Exception as e:
+        logger.error(f"Structured extraction failed for {document_id}: {e}")
+        raise
+    finally:
+        db.close()
+
+
+def task_extract_structured_batch(
+    document_ids: list[str],
+    project_id: str,
+    reprocess: bool = False,
+) -> dict:
+    """Extract structured data from multiple documents.
+
+    Args:
+        document_ids: List of document IDs.
+        project_id: Project to associate extractions with.
+        reprocess: If True, delete existing extractions first.
+
+    Returns:
+        Dict with batch extraction results.
+    """
+    _update_progress(0, f"Starting batch extraction for {len(document_ids)} documents")
+
+    results = []
+    total = len(document_ids)
+
+    for i, doc_id in enumerate(document_ids):
+        progress = (i / total) * 100
+        _update_progress(progress, f"Processing document {i + 1}/{total}")
+
+        try:
+            result = task_extract_structured(
+                document_id=doc_id,
+                project_id=project_id,
+                reprocess=reprocess,
+            )
+            results.append({
+                "document_id": doc_id,
+                "status": "success",
+                "result": result,
+            })
+        except Exception as e:
+            logger.error(f"Extraction failed for {doc_id}: {e}")
+            results.append({
+                "document_id": doc_id,
+                "status": "error",
+                "error": str(e),
+            })
+
+    _update_progress(100, "Batch extraction complete")
+
+    successful = len([r for r in results if r["status"] == "success"])
+    failed = len([r for r in results if r["status"] == "error"])
+
+    total_metrics = sum(
+        r["result"]["metrics_extracted"]
+        for r in results
+        if r["status"] == "success" and "metrics_extracted" in r.get("result", {})
+    )
+    total_claims = sum(
+        r["result"]["claims_extracted"]
+        for r in results
+        if r["status"] == "success" and "claims_extracted" in r.get("result", {})
+    )
+
+    return {
+        "project_id": project_id,
+        "documents_processed": total,
+        "successful": successful,
+        "failed": failed,
+        "total_metrics_extracted": total_metrics,
+        "total_claims_extracted": total_claims,
+        "results": results,
+    }
+
+
+# =============================================================================
+# Multi-Level Extraction Tasks
+# =============================================================================
+
+
+def task_multilevel_extract(
+    version_id: str,
+    profile_code: str = "general",
+    level: int = 2,
+    triggered_by: str | None = None,
+    compute_missing_levels: bool = False,
+) -> dict:
+    """Run multi-level extraction for a document version.
+
+    Extracts facts (claims, metrics, constraints, risks) at the specified
+    level of detail using domain-specific vocabularies.
+
+    Args:
+        version_id: Document version ID.
+        profile_code: Extraction profile (general, vc, pharma, insurance).
+        level: Extraction level (1=basic, 2=standard, 3=deep, 4=forensic).
+        triggered_by: User who triggered the extraction.
+        compute_missing_levels: If True, compute all lower levels first.
+
+    Returns:
+        Dict with extraction run results.
+    """
+    _update_progress(0, f"Starting L{level} {profile_code} extraction")
+
+    settings = get_settings()
+
+    try:
+        ver_uuid = uuid.UUID(version_id)
+
+        # Run async extraction in sync context
+        import asyncio
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.orm import sessionmaker
+
+        async def run_extraction():
+            from evidence_repository.extraction.multilevel import MultiLevelExtractionService
+
+            engine = create_async_engine(settings.database_url)
+            async_session_maker = sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
+
+            results = []
+
+            async with async_session_maker() as session:
+                service = MultiLevelExtractionService()
+
+                # If compute_missing_levels, run all levels up to requested
+                if compute_missing_levels and level > 1:
+                    for lvl in range(1, level):
+                        progress = ((lvl - 1) / level) * 80
+                        _update_progress(progress, f"Computing L{lvl} extraction")
+
+                        try:
+                            run = await service.extract(
+                                session=session,
+                                version_id=ver_uuid,
+                                profile_code=profile_code,
+                                level=lvl,
+                                triggered_by=triggered_by,
+                            )
+                            results.append({
+                                "level": lvl,
+                                "run_id": str(run.id),
+                                "status": run.status.value,
+                            })
+                        except Exception as e:
+                            logger.warning(f"L{lvl} extraction failed: {e}")
+                            results.append({
+                                "level": lvl,
+                                "status": "failed",
+                                "error": str(e),
+                            })
+
+                # Run requested level
+                _update_progress(80, f"Computing L{level} extraction")
+                run = await service.extract(
+                    session=session,
+                    version_id=ver_uuid,
+                    profile_code=profile_code,
+                    level=level,
+                    triggered_by=triggered_by,
+                )
+
+                results.append({
+                    "level": level,
+                    "run_id": str(run.id),
+                    "status": run.status.value,
+                    "metadata": run.metadata_,
+                })
+
+                return {
+                    "version_id": version_id,
+                    "profile_code": profile_code,
+                    "requested_level": level,
+                    "runs": results,
+                }
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            result = loop.run_until_complete(run_extraction())
+        finally:
+            loop.close()
+
+        _update_progress(100, "Multi-level extraction complete")
+        return result
+
+    except Exception as e:
+        logger.error(f"Multi-level extraction failed for {version_id}: {e}")
+        raise
+
+
+def task_multilevel_extract_batch(
+    version_ids: list[str],
+    profile_code: str = "general",
+    level: int = 2,
+    triggered_by: str | None = None,
+) -> dict:
+    """Run multi-level extraction for multiple document versions.
+
+    Args:
+        version_ids: List of document version IDs.
+        profile_code: Extraction profile.
+        level: Extraction level.
+        triggered_by: User who triggered the extraction.
+
+    Returns:
+        Dict with batch results.
+    """
+    _update_progress(0, f"Starting batch L{level} extraction for {len(version_ids)} versions")
+
+    results = []
+    total = len(version_ids)
+
+    for i, ver_id in enumerate(version_ids):
+        progress = (i / total) * 100
+        _update_progress(progress, f"Processing version {i + 1}/{total}")
+
+        try:
+            result = task_multilevel_extract(
+                version_id=ver_id,
+                profile_code=profile_code,
+                level=level,
+                triggered_by=triggered_by,
+                compute_missing_levels=False,
+            )
+            results.append({
+                "version_id": ver_id,
+                "status": "success",
+                "result": result,
+            })
+        except Exception as e:
+            logger.error(f"Extraction failed for {ver_id}: {e}")
+            results.append({
+                "version_id": ver_id,
+                "status": "error",
+                "error": str(e),
+            })
+
+    _update_progress(100, "Batch extraction complete")
+
+    successful = len([r for r in results if r["status"] == "success"])
+    failed = len([r for r in results if r["status"] == "error"])
+
+    return {
+        "profile_code": profile_code,
+        "level": level,
+        "versions_processed": total,
+        "successful": successful,
+        "failed": failed,
+        "results": results,
+    }
+
+
+# =============================================================================
+# Document Version Processing Pipeline (Idempotent)
+# =============================================================================
+
+
+class PipelineStep:
+    """Enumeration of pipeline steps with progress weights."""
+
+    EXTRACT = ("extract", 0, 20)
+    BUILD_SPANS = ("build_spans", 20, 40)
+    BUILD_EMBEDDINGS = ("build_embeddings", 40, 60)
+    EXTRACT_FACTS = ("extract_facts", 60, 80)
+    QUALITY_CHECK = ("quality_check", 80, 100)
+
+
+def task_process_document_version(
+    version_id: str,
+    project_id: str | None = None,
+    profile_code: str = "general",
+    extraction_level: int = 2,
+    skip_extraction: bool = False,
+    skip_spans: bool = False,
+    skip_embeddings: bool = False,
+    skip_facts: bool = False,
+    skip_quality: bool = False,
+    reprocess: bool = False,
+) -> dict:
+    """Process a document version through the complete pipeline.
+
+    This is the main idempotent pipeline for processing document versions.
+    Each step checks for existing results and skips if already completed
+    (unless reprocess=True).
+
+    Pipeline Steps:
+    1. Extract (format-specific text extraction)
+    2. Build spans (create evidence spans from extracted text)
+    3. Build embeddings (generate vector embeddings for spans)
+    4. Extract facts (extract metrics and claims using LLM)
+    5. Quality checks (detect conflicts and open questions)
+
+    Args:
+        version_id: Document version ID to process.
+        project_id: Optional project ID for fact association.
+        profile_code: Extraction profile (general, vc, pharma, insurance).
+        extraction_level: Level of detail for fact extraction (1-4).
+        skip_extraction: Skip text extraction step.
+        skip_spans: Skip span building step.
+        skip_embeddings: Skip embedding generation step.
+        skip_facts: Skip fact extraction step.
+        skip_quality: Skip quality analysis step.
+        reprocess: If True, reprocess even if already completed.
+
+    Returns:
+        Dict with results from each pipeline step.
+    """
+    _update_progress(0, "Starting document version pipeline")
+
+    db = _get_sync_db_session()
+    storage = _get_storage()
+    settings = get_settings()
+
+    result = {
+        "version_id": version_id,
+        "project_id": project_id,
+        "profile_code": profile_code,
+        "extraction_level": extraction_level,
+        "steps_completed": [],
+        "steps_skipped": [],
+        "errors": [],
+    }
+
+    try:
+        # Load document version
+        ver_uuid = uuid.UUID(version_id)
+        version = db.execute(
+            select(DocumentVersion).where(DocumentVersion.id == ver_uuid)
+        ).scalar_one_or_none()
+
+        if not version:
+            raise ValueError(f"Document version {version_id} not found")
+
+        document = db.execute(
+            select(Document).where(Document.id == version.document_id)
+        ).scalar_one_or_none()
+
+        if not document:
+            raise ValueError(f"Document {version.document_id} not found")
+
+        result["document_id"] = str(version.document_id)
+        result["filename"] = document.filename
+
+        # =====================================================================
+        # Step 1: Extract (format-specific text extraction)
+        # =====================================================================
+        if not skip_extraction:
+            step_result = _pipeline_step_extract(
+                db, storage, version, document, reprocess
+            )
+            result["extract"] = step_result
+            if step_result.get("status") == "completed":
+                result["steps_completed"].append("extract")
+            elif step_result.get("status") == "skipped":
+                result["steps_skipped"].append("extract")
+            else:
+                result["errors"].append(f"extract: {step_result.get('error')}")
+        else:
+            result["steps_skipped"].append("extract")
+
+        _update_progress(20, "Step 1/5: Extraction complete")
+
+        # =====================================================================
+        # Step 2: Build spans
+        # =====================================================================
+        if not skip_spans:
+            step_result = _pipeline_step_build_spans(db, version, reprocess)
+            result["build_spans"] = step_result
+            if step_result.get("status") == "completed":
+                result["steps_completed"].append("build_spans")
+            elif step_result.get("status") == "skipped":
+                result["steps_skipped"].append("build_spans")
+            else:
+                result["errors"].append(f"build_spans: {step_result.get('error')}")
+        else:
+            result["steps_skipped"].append("build_spans")
+
+        _update_progress(40, "Step 2/5: Span building complete")
+
+        # =====================================================================
+        # Step 3: Build embeddings
+        # =====================================================================
+        if not skip_embeddings:
+            step_result = _pipeline_step_build_embeddings(db, version, reprocess)
+            result["build_embeddings"] = step_result
+            if step_result.get("status") == "completed":
+                result["steps_completed"].append("build_embeddings")
+            elif step_result.get("status") == "skipped":
+                result["steps_skipped"].append("build_embeddings")
+            else:
+                result["errors"].append(f"build_embeddings: {step_result.get('error')}")
+        else:
+            result["steps_skipped"].append("build_embeddings")
+
+        _update_progress(60, "Step 3/5: Embeddings complete")
+
+        # =====================================================================
+        # Step 4: Extract facts
+        # =====================================================================
+        if not skip_facts and project_id:
+            step_result = _pipeline_step_extract_facts(
+                db, version, project_id, profile_code, extraction_level, reprocess
+            )
+            result["extract_facts"] = step_result
+            if step_result.get("status") == "completed":
+                result["steps_completed"].append("extract_facts")
+            elif step_result.get("status") == "skipped":
+                result["steps_skipped"].append("extract_facts")
+            else:
+                result["errors"].append(f"extract_facts: {step_result.get('error')}")
+        else:
+            result["steps_skipped"].append("extract_facts")
+            if not project_id and not skip_facts:
+                result["extract_facts"] = {"status": "skipped", "reason": "no_project_id"}
+
+        _update_progress(80, "Step 4/5: Fact extraction complete")
+
+        # =====================================================================
+        # Step 5: Quality checks
+        # =====================================================================
+        if not skip_quality and project_id:
+            step_result = _pipeline_step_quality_check(
+                db, version, project_id, profile_code, extraction_level
+            )
+            result["quality_check"] = step_result
+            if step_result.get("status") == "completed":
+                result["steps_completed"].append("quality_check")
+            elif step_result.get("status") == "skipped":
+                result["steps_skipped"].append("quality_check")
+            else:
+                result["errors"].append(f"quality_check: {step_result.get('error')}")
+        else:
+            result["steps_skipped"].append("quality_check")
+
+        _update_progress(100, "Pipeline complete")
+
+        result["status"] = "completed" if not result["errors"] else "partial"
+        return result
+
+    except Exception as e:
+        logger.error(f"Pipeline failed for version {version_id}: {e}")
+        result["status"] = "failed"
+        result["error"] = str(e)
+        raise
+    finally:
+        db.close()
+
+
+def _pipeline_step_extract(
+    db: Session,
+    storage: LocalFilesystemStorage,
+    version,
+    document,
+    reprocess: bool,
+) -> dict:
+    """Step 1: Extract text from document.
+
+    Idempotent: Skips if extraction_status is COMPLETED and reprocess=False.
+    """
+    from evidence_repository.models.document import ExtractionStatus
+
+    # Check if already extracted
+    if (
+        version.extraction_status == ExtractionStatus.COMPLETED
+        and version.extracted_text
+        and not reprocess
+    ):
+        return {
+            "status": "skipped",
+            "reason": "already_extracted",
+            "text_length": len(version.extracted_text),
+        }
+
+    try:
+        # Update status
+        version.extraction_status = ExtractionStatus.PROCESSING
+        db.flush()
+
+        # Download file content
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            file_data = loop.run_until_complete(storage.download(version.storage_path))
+        finally:
+            loop.close()
+
+        # Extract based on content type
+        text = ""
+        page_count = None
+
+        if document.content_type == "application/pdf":
+            text, page_count = _extract_pdf_text(file_data)
+        elif document.content_type in ["text/plain", "text/markdown", "text/csv"]:
+            text = _extract_text_content(file_data)
+        elif document.content_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            text = _extract_xlsx_text(file_data)
+        elif document.content_type.startswith("image/"):
+            text = _extract_image_text(file_data, document.content_type)
+        else:
+            raise ValueError(f"Unsupported content type: {document.content_type}")
+
+        # Update version
+        version.extracted_text = text
+        version.extraction_status = ExtractionStatus.COMPLETED
+        version.extracted_at = datetime.utcnow()
+        version.page_count = page_count
+        version.extraction_error = None
+        db.commit()
+
+        return {
+            "status": "completed",
+            "text_length": len(text),
+            "page_count": page_count,
+        }
+
+    except Exception as e:
+        version.extraction_status = ExtractionStatus.FAILED
+        version.extraction_error = str(e)
+        db.commit()
+        return {"status": "error", "error": str(e)}
+
+
+def _pipeline_step_build_spans(
+    db: Session,
+    version,
+    reprocess: bool,
+) -> dict:
+    """Step 2: Build spans from extracted text.
+
+    Idempotent: Skips if spans already exist and reprocess=False.
+    """
+    from evidence_repository.models.evidence import Span, SpanType
+
+    # Check if spans already exist
+    existing_spans = db.execute(
+        select(Span).where(Span.document_version_id == version.id).limit(1)
+    ).scalar_one_or_none()
+
+    if existing_spans and not reprocess:
+        # Count existing spans
+        span_count = db.execute(
+            select(Span.id).where(Span.document_version_id == version.id)
+        ).fetchall()
+        return {
+            "status": "skipped",
+            "reason": "spans_exist",
+            "span_count": len(span_count),
+        }
+
+    try:
+        # Delete existing spans if reprocessing
+        if reprocess:
+            db.execute(
+                Span.__table__.delete().where(Span.document_version_id == version.id)
+            )
+            db.flush()
+
+        # Check if we have extracted text
+        if not version.extracted_text:
+            return {"status": "skipped", "reason": "no_extracted_text"}
+
+        # Build spans from text - simple paragraph-based chunking
+        spans_created = _build_spans_from_text(db, version)
+        db.commit()
+
+        return {
+            "status": "completed",
+            "spans_created": spans_created,
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+
+def _build_spans_from_text(db: Session, version) -> int:
+    """Build spans from extracted text using paragraph-based chunking."""
+    import hashlib
+    import re
+    from evidence_repository.models.evidence import Span, SpanType
+
+    text = version.extracted_text
+    if not text:
+        return 0
+
+    # Split by double newlines or page markers
+    parts = re.split(r'\n\n+|\f', text)
+
+    spans_created = 0
+    current_pos = 0
+
+    for i, part in enumerate(parts):
+        part = part.strip()
+        if not part or len(part) < 10:  # Skip very short paragraphs
+            current_pos += len(part) + 2
+            continue
+
+        # Compute span hash for idempotency
+        span_hash = hashlib.sha256(
+            f"{version.id}:{i}:{part[:100]}".encode()
+        ).hexdigest()[:64]
+
+        # Check if span with this hash already exists
+        existing = db.execute(
+            select(Span).where(
+                Span.document_version_id == version.id,
+                Span.span_hash == span_hash,
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            current_pos += len(part) + 2
+            continue
+
+        # Determine span type based on content
+        span_type = SpanType.TEXT
+        if re.match(r'^#+\s|^[A-Z][A-Z\s]{2,}$', part):
+            span_type = SpanType.HEADING
+        elif '|' in part and part.count('|') > 2:
+            span_type = SpanType.TABLE
+
+        # Create span
+        span = Span(
+            document_version_id=version.id,
+            span_hash=span_hash,
+            start_locator={
+                "type": "text",
+                "char_offset_start": current_pos,
+                "char_offset_end": current_pos + len(part),
+                "paragraph_index": i,
+            },
+            end_locator=None,
+            text_content=part,
+            span_type=span_type,
+            metadata_={"paragraph_index": i},
+        )
+        db.add(span)
+        spans_created += 1
+        current_pos += len(part) + 2
+
+    return spans_created
+
+
+def _pipeline_step_build_embeddings(
+    db: Session,
+    version,
+    reprocess: bool,
+) -> dict:
+    """Step 3: Generate embeddings for spans.
+
+    Idempotent: Skips spans that already have embeddings (unless reprocess=True).
+    """
+    from evidence_repository.embeddings.openai_client import OpenAIEmbeddingClient
+    from evidence_repository.models.embedding import EmbeddingChunk
+    from evidence_repository.models.evidence import Span, SpanType
+
+    # Embeddable span types (text-based spans only)
+    EMBEDDABLE_SPAN_TYPES = {SpanType.TEXT, SpanType.HEADING, SpanType.CITATION, SpanType.FOOTNOTE}
+
+    try:
+        # Get spans that need embeddings
+        spans = db.execute(
+            select(Span)
+            .where(
+                Span.document_version_id == version.id,
+                Span.span_type.in_(EMBEDDABLE_SPAN_TYPES),
+            )
+            .order_by(Span.created_at)
+        ).scalars().all()
+
+        if not spans:
+            return {"status": "skipped", "reason": "no_embeddable_spans"}
+
+        # Check which spans already have embeddings
+        spans_to_embed = []
+        if not reprocess:
+            span_ids = [s.id for s in spans]
+            existing_embeddings = db.execute(
+                select(EmbeddingChunk.span_id)
+                .where(EmbeddingChunk.span_id.in_(span_ids))
+            ).fetchall()
+            existing_ids = {row[0] for row in existing_embeddings}
+
+            spans_to_embed = [s for s in spans if s.id not in existing_ids]
+        else:
+            # Delete existing embeddings for this version
+            db.execute(
+                EmbeddingChunk.__table__.delete().where(
+                    EmbeddingChunk.document_version_id == version.id
+                )
+            )
+            db.flush()
+            spans_to_embed = list(spans)
+
+        if not spans_to_embed:
+            return {
+                "status": "skipped",
+                "reason": "all_spans_have_embeddings",
+                "total_spans": len(spans),
+            }
+
+        # Filter out empty spans
+        valid_spans = [s for s in spans_to_embed if s.text_content and s.text_content.strip()]
+        if not valid_spans:
+            return {"status": "skipped", "reason": "no_valid_span_content"}
+
+        # Generate embeddings in batches
+        client = OpenAIEmbeddingClient()
+        BATCH_SIZE = 50
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        chunks_created = 0
+        try:
+            for batch_start in range(0, len(valid_spans), BATCH_SIZE):
+                batch_end = min(batch_start + BATCH_SIZE, len(valid_spans))
+                batch_spans = valid_spans[batch_start:batch_end]
+
+                texts = [s.text_content for s in batch_spans]
+                embeddings = loop.run_until_complete(client.embed_texts(texts))
+
+                for span, embedding, idx in zip(batch_spans, embeddings, range(len(batch_spans))):
+                    chunk = EmbeddingChunk(
+                        document_version_id=version.id,
+                        span_id=span.id,
+                        chunk_index=idx,
+                        text=span.text_content,
+                        embedding=embedding,
+                        metadata_={
+                            "span_type": span.span_type.value,
+                            "span_hash": span.span_hash,
+                        },
+                    )
+                    db.add(chunk)
+                    chunks_created += 1
+        finally:
+            loop.close()
+
+        db.commit()
+
+        return {
+            "status": "completed",
+            "spans_embedded": chunks_created,
+            "spans_skipped": len(spans) - len(valid_spans),
+            "tokens_used": client.get_token_usage(),
+        }
+
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "error": str(e)}
+
+
+def _pipeline_step_extract_facts(
+    db: Session,
+    version,
+    project_id: str,
+    profile_code: str,
+    extraction_level: int,
+    reprocess: bool,
+) -> dict:
+    """Step 4: Extract facts (metrics and claims) from spans.
+
+    Idempotent: Checks for existing extraction runs.
+    """
+    try:
+        settings = get_settings()
+
+        import asyncio
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.orm import sessionmaker as async_sessionmaker
+
+        async def run_extraction():
+            from evidence_repository.extraction.multilevel import MultiLevelExtractionService
+            from evidence_repository.models.extraction_level import (
+                ExtractionRun,
+                ExtractionRunStatus,
+                ExtractionProfile,
+                ExtractionProfileCode,
+            )
+
+            engine = create_async_engine(settings.database_url)
+            async_session_maker = async_sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
+
+            async with async_session_maker() as session:
+                service = MultiLevelExtractionService()
+
+                # Check if extraction already exists
+                if not reprocess:
+                    try:
+                        code_enum = ExtractionProfileCode(profile_code)
+                    except ValueError:
+                        code_enum = ExtractionProfileCode.GENERAL
+
+                    # Get profile
+                    profile_stmt = select(ExtractionProfile).where(
+                        ExtractionProfile.code == code_enum
+                    )
+                    profile_result = await session.execute(profile_stmt)
+                    profile = profile_result.scalar_one_or_none()
+
+                    if profile:
+                        # Check for existing successful run
+                        existing_stmt = select(ExtractionRun).where(
+                            ExtractionRun.version_id == version.id,
+                            ExtractionRun.profile_id == profile.id,
+                            ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+                        )
+                        existing_result = await session.execute(existing_stmt)
+                        existing_run = existing_result.scalar_one_or_none()
+
+                        if existing_run:
+                            return {
+                                "status": "skipped",
+                                "reason": "extraction_exists",
+                                "existing_run_id": str(existing_run.id),
+                            }
+
+                # Run extraction
+                run = await service.extract(
+                    session=session,
+                    version_id=version.id,
+                    profile_code=profile_code,
+                    level=extraction_level,
+                    triggered_by="pipeline",
+                )
+
+                return {
+                    "status": "completed",
+                    "run_id": str(run.id),
+                    "run_status": run.status.value,
+                    "metadata": run.metadata_,
+                }
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(run_extraction())
+        finally:
+            loop.close()
+
+        return result
+
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def _pipeline_step_quality_check(
+    db: Session,
+    version,
+    project_id: str,
+    profile_code: str,
+    extraction_level: int,
+) -> dict:
+    """Step 5: Run quality analysis on extracted facts.
+
+    This step is always run (not idempotent) as it provides current analysis.
+    """
+    try:
+        settings = get_settings()
+
+        import asyncio
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.orm import sessionmaker as async_sessionmaker
+
+        async def run_quality_check():
+            from evidence_repository.services.quality_analysis import QualityAnalysisService
+
+            engine = create_async_engine(settings.database_url)
+            async_session_maker = async_sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
+
+            async with async_session_maker() as session:
+                service = QualityAnalysisService(db=session)
+
+                result = await service.analyze_document(
+                    document_id=version.document_id,
+                    version_id=version.id,
+                )
+
+                return {
+                    "status": "completed",
+                    "metric_conflicts": len(result.metric_conflicts),
+                    "claim_conflicts": len(result.claim_conflicts),
+                    "open_questions": len(result.open_questions),
+                    "summary": result.summary,
+                }
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(run_quality_check())
+        finally:
+            loop.close()
+
+        return result
+
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+def task_upgrade_extraction_level(
+    version_id: str,
+    profile_code: str,
+    target_level: int,
+    triggered_by: str | None = None,
+) -> dict:
+    """Upgrade extraction to a higher level.
+
+    Computes all missing levels up to the target level.
+    Never overwrites existing extraction results.
+
+    Args:
+        version_id: Document version ID.
+        profile_code: Extraction profile.
+        target_level: Target extraction level (1-4).
+        triggered_by: User who triggered the upgrade.
+
+    Returns:
+        Dict with upgrade results.
+    """
+    _update_progress(0, f"Upgrading to L{target_level} extraction")
+
+    settings = get_settings()
+
+    try:
+        ver_uuid = uuid.UUID(version_id)
+
+        import asyncio
+        from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy import select
+
+        async def run_upgrade():
+            from evidence_repository.extraction.multilevel import MultiLevelExtractionService
+            from evidence_repository.models.extraction_level import (
+                ExtractionRun,
+                ExtractionRunStatus,
+                ExtractionProfile,
+                ExtractionProfileCode,
+            )
+
+            engine = create_async_engine(settings.database_url)
+            async_session_maker = sessionmaker(
+                engine, class_=AsyncSession, expire_on_commit=False
+            )
+
+            async with async_session_maker() as session:
+                service = MultiLevelExtractionService()
+
+                # Get profile
+                try:
+                    code_enum = ExtractionProfileCode(profile_code)
+                except ValueError:
+                    code_enum = ExtractionProfileCode.GENERAL
+
+                profile_stmt = select(ExtractionProfile).where(
+                    ExtractionProfile.code == code_enum
+                )
+                profile_result = await session.execute(profile_stmt)
+                profile = profile_result.scalar_one_or_none()
+
+                if not profile:
+                    # Create profile on first use
+                    profile = await service._get_or_create_profile(session, profile_code)
+
+                # Check which levels already exist
+                existing_runs_stmt = select(ExtractionRun).where(
+                    ExtractionRun.version_id == ver_uuid,
+                    ExtractionRun.profile_id == profile.id,
+                    ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+                )
+                existing_result = await session.execute(existing_runs_stmt)
+                existing_runs = existing_result.scalars().all()
+
+                # Get existing level ranks
+                existing_levels = set()
+                for run in existing_runs:
+                    level_record = await session.get(
+                        "ExtractionLevel", run.level_id
+                    )
+                    if level_record:
+                        existing_levels.add(level_record.rank)
+
+                # Compute missing levels
+                missing_levels = [
+                    lvl for lvl in range(1, target_level + 1)
+                    if lvl not in existing_levels
+                ]
+
+                if not missing_levels:
+                    return {
+                        "version_id": version_id,
+                        "profile_code": profile_code,
+                        "target_level": target_level,
+                        "status": "already_complete",
+                        "existing_levels": list(existing_levels),
+                        "computed_levels": [],
+                    }
+
+                computed = []
+                for i, lvl in enumerate(missing_levels):
+                    progress = (i / len(missing_levels)) * 90
+                    _update_progress(progress, f"Computing L{lvl}")
+
+                    try:
+                        run = await service.extract(
+                            session=session,
+                            version_id=ver_uuid,
+                            profile_code=profile_code,
+                            level=lvl,
+                            triggered_by=triggered_by,
+                        )
+                        computed.append({
+                            "level": lvl,
+                            "run_id": str(run.id),
+                            "status": run.status.value,
+                        })
+                    except Exception as e:
+                        logger.error(f"L{lvl} extraction failed: {e}")
+                        computed.append({
+                            "level": lvl,
+                            "status": "failed",
+                            "error": str(e),
+                        })
+
+                return {
+                    "version_id": version_id,
+                    "profile_code": profile_code,
+                    "target_level": target_level,
+                    "status": "upgraded",
+                    "existing_levels": list(existing_levels),
+                    "computed_levels": computed,
+                }
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        try:
+            result = loop.run_until_complete(run_upgrade())
+        finally:
+            loop.close()
+
+        _update_progress(100, "Level upgrade complete")
+        return result
+
+    except Exception as e:
+        logger.error(f"Level upgrade failed for {version_id}: {e}")
+        raise

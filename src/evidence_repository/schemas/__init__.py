@@ -19,6 +19,15 @@ from evidence_repository.schemas.evidence import (
     EvidencePackItemCreate,
     EvidencePackItemResponse,
     EvidencePackResponse,
+    JurisClaimSummary,
+    JurisConflictSummary,
+    JurisDocumentSummary,
+    JurisEvidencePackCreate,
+    JurisEvidencePackResponse,
+    JurisMetricSummary,
+    JurisOpenQuestionSummary,
+    JurisQualitySummary,
+    JurisSpanSummary,
     LocatorSchema,
     MetricCreate,
     MetricResponse,
@@ -33,9 +42,14 @@ from evidence_repository.schemas.project import (
     ProjectUpdate,
 )
 from evidence_repository.schemas.search import (
+    Citation,
+    ProjectSearchQuery,
+    SearchMode,
     SearchQuery,
     SearchResult,
     SearchResultItem,
+    SpanLocator,
+    SpanTypeFilter,
 )
 from evidence_repository.schemas.job import (
     JobResponse,
@@ -47,6 +61,13 @@ from evidence_repository.schemas.job import (
     URLIngestRequest,
     BatchExtractRequest,
     BatchEmbedRequest,
+)
+from evidence_repository.schemas.quality import (
+    QualityAnalysisResponse,
+    MetricConflictResponse,
+    ClaimConflictResponse,
+    OpenQuestionResponse,
+    QualitySummary,
 )
 
 __all__ = [
@@ -78,10 +99,25 @@ __all__ = [
     "EvidencePackResponse",
     "EvidencePackItemCreate",
     "EvidencePackItemResponse",
+    # Juris-AGI Integration
+    "JurisDocumentSummary",
+    "JurisSpanSummary",
+    "JurisClaimSummary",
+    "JurisMetricSummary",
+    "JurisConflictSummary",
+    "JurisOpenQuestionSummary",
+    "JurisQualitySummary",
+    "JurisEvidencePackCreate",
+    "JurisEvidencePackResponse",
     # Search
+    "Citation",
+    "ProjectSearchQuery",
+    "SearchMode",
     "SearchQuery",
     "SearchResult",
     "SearchResultItem",
+    "SpanLocator",
+    "SpanTypeFilter",
     # Jobs
     "JobResponse",
     "JobEnqueueResponse",
@@ -92,4 +128,10 @@ __all__ = [
     "URLIngestRequest",
     "BatchExtractRequest",
     "BatchEmbedRequest",
+    # Quality
+    "QualityAnalysisResponse",
+    "MetricConflictResponse",
+    "ClaimConflictResponse",
+    "OpenQuestionResponse",
+    "QualitySummary",
 ]

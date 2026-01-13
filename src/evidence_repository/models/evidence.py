@@ -113,11 +113,47 @@ class Span(Base, UUIDMixin):
     )
 
 
+class ClaimType(str, enum.Enum):
+    """Type of compliance/legal claim."""
+
+    SOC2 = "soc2"
+    ISO27001 = "iso27001"
+    GDPR = "gdpr"
+    HIPAA = "hipaa"
+    IP_OWNERSHIP = "ip_ownership"
+    SECURITY_INCIDENT = "security_incident"
+    COMPLIANCE = "compliance"
+    CERTIFICATION = "certification"
+    AUDIT = "audit"
+    POLICY = "policy"
+    OTHER = "other"
+
+
+class Certainty(str, enum.Enum):
+    """Certainty level of extracted information."""
+
+    DEFINITE = "definite"  # Explicitly stated fact
+    PROBABLE = "probable"  # Strongly implied
+    POSSIBLE = "possible"  # Mentioned but uncertain
+    SPECULATIVE = "speculative"  # Inferred, not stated
+
+
+class Reliability(str, enum.Enum):
+    """Reliability of the source."""
+
+    VERIFIED = "verified"  # Audited/certified source
+    OFFICIAL = "official"  # Official company document
+    INTERNAL = "internal"  # Internal document, unverified
+    THIRD_PARTY = "third_party"  # External source
+    UNKNOWN = "unknown"
+
+
 class Claim(Base, UUIDMixin):
     """Extracted claim citing an evidence span.
 
     Claims are assertions extracted from documents that reference
-    specific spans as evidence.
+    specific spans as evidence. Used for compliance, certifications,
+    and legal assertions.
     """
 
     __tablename__ = "claims"
@@ -140,9 +176,34 @@ class Claim(Base, UUIDMixin):
 
     # Claim content
     claim_text: Mapped[str] = mapped_column(Text, nullable=False)
-    claim_type: Mapped[str | None] = mapped_column(String(100))
+    claim_type: Mapped[ClaimType] = mapped_column(
+        Enum(ClaimType),
+        default=ClaimType.OTHER,
+        nullable=False,
+        index=True,
+    )
 
-    # Confidence score (0.0 - 1.0)
+    # Time scope (e.g., "Q4 2024", "FY2023", "as of 2024-01-15")
+    time_scope: Mapped[str | None] = mapped_column(String(100))
+
+    # Certainty: how certain is this claim?
+    certainty: Mapped[Certainty] = mapped_column(
+        Enum(Certainty),
+        default=Certainty.PROBABLE,
+        nullable=False,
+    )
+
+    # Reliability: how reliable is the source?
+    reliability: Mapped[Reliability] = mapped_column(
+        Enum(Reliability),
+        default=Reliability.UNKNOWN,
+        nullable=False,
+    )
+
+    # Extraction confidence (0.0 - 1.0): ML model confidence
+    extraction_confidence: Mapped[float | None] = mapped_column(Float)
+
+    # Legacy confidence field (deprecated, use extraction_confidence)
     confidence: Mapped[float | None] = mapped_column(Float)
 
     # Metadata
@@ -162,11 +223,31 @@ class Claim(Base, UUIDMixin):
     )
 
 
+class MetricType(str, enum.Enum):
+    """Type of financial/business metric."""
+
+    ARR = "arr"  # Annual Recurring Revenue
+    MRR = "mrr"  # Monthly Recurring Revenue
+    REVENUE = "revenue"
+    BURN = "burn"  # Burn rate
+    RUNWAY = "runway"  # Cash runway
+    CASH = "cash"  # Cash on hand
+    HEADCOUNT = "headcount"
+    CHURN = "churn"  # Customer churn rate
+    NRR = "nrr"  # Net Revenue Retention
+    GROSS_MARGIN = "gross_margin"
+    CAC = "cac"  # Customer Acquisition Cost
+    LTV = "ltv"  # Lifetime Value
+    EBITDA = "ebitda"
+    GROWTH_RATE = "growth_rate"
+    OTHER = "other"
+
+
 class Metric(Base, UUIDMixin):
     """Extracted metric citing an evidence span.
 
     Metrics are quantitative values extracted from documents that reference
-    specific spans as evidence.
+    specific spans as evidence. Used for financial and business KPIs.
     """
 
     __tablename__ = "metrics"
@@ -189,8 +270,35 @@ class Metric(Base, UUIDMixin):
 
     # Metric content
     metric_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    metric_type: Mapped[MetricType] = mapped_column(
+        Enum(MetricType),
+        default=MetricType.OTHER,
+        nullable=False,
+        index=True,
+    )
     metric_value: Mapped[str] = mapped_column(String(255), nullable=False)
+    numeric_value: Mapped[float | None] = mapped_column(Float)  # Parsed numeric value
     unit: Mapped[str | None] = mapped_column(String(100))
+
+    # Time scope (e.g., "Q4 2024", "FY2023", "as of 2024-01-15")
+    time_scope: Mapped[str | None] = mapped_column(String(100))
+
+    # Certainty: how certain is this metric?
+    certainty: Mapped[Certainty] = mapped_column(
+        Enum(Certainty),
+        default=Certainty.PROBABLE,
+        nullable=False,
+    )
+
+    # Reliability: how reliable is the source?
+    reliability: Mapped[Reliability] = mapped_column(
+        Enum(Reliability),
+        default=Reliability.UNKNOWN,
+        nullable=False,
+    )
+
+    # Extraction confidence (0.0 - 1.0): ML model confidence
+    extraction_confidence: Mapped[float | None] = mapped_column(Float)
 
     # Metadata
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)

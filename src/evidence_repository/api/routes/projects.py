@@ -1,6 +1,7 @@
 """Project management endpoints."""
 
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -9,9 +10,27 @@ from sqlalchemy.orm import selectinload
 
 from evidence_repository.api.dependencies import User, get_current_user
 from evidence_repository.db.session import get_db_session
-from evidence_repository.models.document import Document
+from evidence_repository.models.document import Document, DocumentVersion
+from evidence_repository.models.evidence import (
+    Claim,
+    EvidencePack,
+    EvidencePackItem,
+    Metric,
+    Span,
+)
 from evidence_repository.models.project import Project, ProjectDocument
 from evidence_repository.schemas.common import PaginatedResponse
+from evidence_repository.schemas.evidence import (
+    JurisClaimSummary,
+    JurisConflictSummary,
+    JurisDocumentSummary,
+    JurisEvidencePackCreate,
+    JurisEvidencePackResponse,
+    JurisMetricSummary,
+    JurisOpenQuestionSummary,
+    JurisQualitySummary,
+    JurisSpanSummary,
+)
 from evidence_repository.schemas.project import (
     AttachDocumentRequest,
     ProjectCreate,
@@ -19,6 +38,7 @@ from evidence_repository.schemas.project import (
     ProjectResponse,
     ProjectUpdate,
 )
+from evidence_repository.services.quality_analysis import QualityAnalysisService
 
 router = APIRouter()
 
@@ -240,8 +260,6 @@ async def delete_project(
             detail=f"Project {project_id} not found",
         )
 
-    from datetime import datetime
-
     project.deleted_at = datetime.utcnow()
     await db.commit()
 
@@ -372,3 +390,410 @@ async def detach_document(
 
     await db.delete(project_document)
     await db.commit()
+
+
+# =============================================================================
+# Juris-AGI Evidence Packs (Primary Integration Point)
+# =============================================================================
+
+
+@router.post(
+    "/{project_id}/evidence-packs",
+    response_model=JurisEvidencePackResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Evidence Pack (Juris-AGI)",
+    description="""
+Create a comprehensive evidence pack for Juris-AGI integration.
+
+This is the **primary integration point** between Evidence Repository and Juris-AGI.
+
+The response includes:
+- **documents**: All documents referenced by included spans
+- **spans**: Evidence spans with text and locators
+- **claims**: Claims extracted from spans
+- **metrics**: Metrics extracted from spans
+- **conflicts**: Detected conflicts (metric/claim contradictions)
+- **open_questions**: Questions requiring human attention
+
+Use this endpoint to bundle evidence for legal analysis and reporting.
+    """,
+)
+async def create_juris_evidence_pack(
+    project_id: uuid.UUID,
+    pack_in: JurisEvidencePackCreate,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> JurisEvidencePackResponse:
+    """Create a comprehensive evidence pack for Juris-AGI."""
+    # Verify project exists
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    if not project_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
+        )
+
+    # Create the evidence pack
+    pack = EvidencePack(
+        project_id=project_id,
+        name=pack_in.name,
+        description=pack_in.description,
+        created_by=user.id,
+        metadata_=pack_in.metadata,
+    )
+    db.add(pack)
+    await db.flush()
+
+    # Add items from specified IDs
+    order_index = 0
+
+    # Add spans
+    for span_id in pack_in.span_ids:
+        span_result = await db.execute(select(Span).where(Span.id == span_id))
+        if span_result.scalar_one_or_none():
+            item = EvidencePackItem(
+                evidence_pack_id=pack.id,
+                span_id=span_id,
+                order_index=order_index,
+            )
+            db.add(item)
+            order_index += 1
+
+    # Add claims (link to their spans)
+    for claim_id in pack_in.claim_ids:
+        claim_result = await db.execute(select(Claim).where(Claim.id == claim_id))
+        claim = claim_result.scalar_one_or_none()
+        if claim:
+            item = EvidencePackItem(
+                evidence_pack_id=pack.id,
+                span_id=claim.span_id,
+                claim_id=claim_id,
+                order_index=order_index,
+            )
+            db.add(item)
+            order_index += 1
+
+    # Add metrics (link to their spans)
+    for metric_id in pack_in.metric_ids:
+        metric_result = await db.execute(select(Metric).where(Metric.id == metric_id))
+        metric = metric_result.scalar_one_or_none()
+        if metric:
+            item = EvidencePackItem(
+                evidence_pack_id=pack.id,
+                span_id=metric.span_id,
+                metric_id=metric_id,
+                order_index=order_index,
+            )
+            db.add(item)
+            order_index += 1
+
+    await db.commit()
+    await db.refresh(pack)
+
+    # Return the comprehensive pack response
+    return await _build_juris_evidence_pack_response(
+        db, pack, pack_in.include_quality_analysis
+    )
+
+
+@router.get(
+    "/{project_id}/evidence-packs/{pack_id}",
+    response_model=JurisEvidencePackResponse,
+    summary="Get Evidence Pack (Juris-AGI)",
+    description="""
+Get a comprehensive evidence pack for Juris-AGI integration.
+
+This is the **primary integration point** between Evidence Repository and Juris-AGI.
+
+The response includes:
+- **documents**: All documents referenced by included spans
+- **spans**: Evidence spans with text and locators
+- **claims**: Claims extracted from spans
+- **metrics**: Metrics extracted from spans
+- **conflicts**: Detected conflicts (metric/claim contradictions)
+- **open_questions**: Questions requiring human attention
+
+Quality analysis is always included to ensure data integrity awareness.
+    """,
+)
+async def get_juris_evidence_pack(
+    project_id: uuid.UUID,
+    pack_id: uuid.UUID,
+    include_quality_analysis: bool = Query(
+        default=True, description="Include conflicts and open questions"
+    ),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> JurisEvidencePackResponse:
+    """Get a comprehensive evidence pack for Juris-AGI."""
+    # Verify project exists
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    if not project_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
+        )
+
+    # Get the evidence pack
+    result = await db.execute(
+        select(EvidencePack).where(
+            EvidencePack.id == pack_id,
+            EvidencePack.project_id == project_id,
+        )
+    )
+    pack = result.scalar_one_or_none()
+
+    if not pack:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evidence pack {pack_id} not found in project {project_id}",
+        )
+
+    return await _build_juris_evidence_pack_response(db, pack, include_quality_analysis)
+
+
+@router.get(
+    "/{project_id}/evidence-packs",
+    response_model=list[JurisEvidencePackResponse],
+    summary="List Evidence Packs (Juris-AGI)",
+    description="List all evidence packs for a project.",
+)
+async def list_juris_evidence_packs(
+    project_id: uuid.UUID,
+    include_quality_analysis: bool = Query(
+        default=False, description="Include conflicts and open questions (slower)"
+    ),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> list[JurisEvidencePackResponse]:
+    """List all evidence packs for a project."""
+    # Verify project exists
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    if not project_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
+        )
+
+    # Get all evidence packs for the project
+    result = await db.execute(
+        select(EvidencePack)
+        .where(EvidencePack.project_id == project_id)
+        .order_by(EvidencePack.created_at.desc())
+    )
+    packs = result.scalars().all()
+
+    responses = []
+    for pack in packs:
+        response = await _build_juris_evidence_pack_response(
+            db, pack, include_quality_analysis
+        )
+        responses.append(response)
+
+    return responses
+
+
+# =============================================================================
+# Helper Functions for Juris-AGI Evidence Packs
+# =============================================================================
+
+
+async def _build_juris_evidence_pack_response(
+    db: AsyncSession,
+    pack: EvidencePack,
+    include_quality_analysis: bool = True,
+) -> JurisEvidencePackResponse:
+    """Build comprehensive Juris-AGI evidence pack response."""
+    # Load pack items with relationships
+    items_result = await db.execute(
+        select(EvidencePackItem)
+        .options(
+            selectinload(EvidencePackItem.span)
+            .selectinload(Span.document_version)
+            .selectinload(DocumentVersion.document),
+            selectinload(EvidencePackItem.claim),
+            selectinload(EvidencePackItem.metric),
+        )
+        .where(EvidencePackItem.evidence_pack_id == pack.id)
+        .order_by(EvidencePackItem.order_index)
+    )
+    items = items_result.scalars().all()
+
+    # Collect unique documents, spans, claims, metrics
+    documents_map: dict[uuid.UUID, JurisDocumentSummary] = {}
+    spans_map: dict[uuid.UUID, JurisSpanSummary] = {}
+    claims_list: list[JurisClaimSummary] = []
+    metrics_list: list[JurisMetricSummary] = []
+
+    for item in items:
+        span = item.span
+        if not span:
+            continue
+
+        # Add span
+        if span.id not in spans_map:
+            doc_version = span.document_version
+            document = doc_version.document if doc_version else None
+            filename = document.filename if document else "unknown"
+
+            spans_map[span.id] = JurisSpanSummary(
+                id=span.id,
+                document_version_id=span.document_version_id,
+                document_filename=filename,
+                span_type=span.span_type.value if hasattr(span.span_type, "value") else str(span.span_type),
+                text_content=span.text_content,
+                locator=span.start_locator,
+            )
+
+            # Add document
+            if doc_version and doc_version.document_id not in documents_map:
+                documents_map[doc_version.document_id] = JurisDocumentSummary(
+                    id=doc_version.document_id,
+                    filename=filename,
+                    content_type=document.content_type if document else None,
+                    version_id=doc_version.id,
+                    version_number=doc_version.version_number,
+                    extraction_status=doc_version.extraction_status.value
+                    if hasattr(doc_version.extraction_status, "value")
+                    else str(doc_version.extraction_status)
+                    if doc_version.extraction_status
+                    else None,
+                )
+
+        # Add claim
+        if item.claim:
+            claim = item.claim
+            claims_list.append(
+                JurisClaimSummary(
+                    id=claim.id,
+                    span_id=claim.span_id,
+                    claim_text=claim.claim_text,
+                    claim_type=claim.claim_type.value if hasattr(claim.claim_type, "value") else str(claim.claim_type),
+                    certainty=claim.certainty.value if hasattr(claim.certainty, "value") else str(claim.certainty),
+                    reliability=claim.reliability.value if hasattr(claim.reliability, "value") else str(claim.reliability),
+                    time_scope=claim.time_scope,
+                    extraction_confidence=claim.extraction_confidence,
+                )
+            )
+
+        # Add metric
+        if item.metric:
+            metric = item.metric
+            metrics_list.append(
+                JurisMetricSummary(
+                    id=metric.id,
+                    span_id=metric.span_id,
+                    metric_name=metric.metric_name,
+                    metric_type=metric.metric_type.value if hasattr(metric.metric_type, "value") else str(metric.metric_type),
+                    metric_value=metric.metric_value,
+                    numeric_value=metric.numeric_value,
+                    unit=metric.unit,
+                    time_scope=metric.time_scope,
+                    certainty=metric.certainty.value if hasattr(metric.certainty, "value") else str(metric.certainty),
+                    reliability=metric.reliability.value if hasattr(metric.reliability, "value") else str(metric.reliability),
+                )
+            )
+
+    # Quality analysis
+    conflicts: list[JurisConflictSummary] = []
+    open_questions: list[JurisOpenQuestionSummary] = []
+    quality_summary: JurisQualitySummary | None = None
+
+    if include_quality_analysis and documents_map:
+        quality_service = QualityAnalysisService(db)
+
+        # Run quality analysis for each document
+        all_metric_conflicts = []
+        all_claim_conflicts = []
+        all_open_questions = []
+
+        for doc_id, doc_summary in documents_map.items():
+            try:
+                analysis_result = await quality_service.analyze_document(
+                    document_id=doc_id,
+                    version_id=doc_summary.version_id,
+                )
+
+                # Collect metric conflicts
+                for conflict in analysis_result.metric_conflicts:
+                    all_metric_conflicts.append(
+                        JurisConflictSummary(
+                            conflict_type="metric",
+                            severity=conflict.severity.value,
+                            reason=conflict.reason,
+                            affected_ids=[str(mid) for mid in conflict.metric_ids],
+                            details={
+                                "metric_name": conflict.metric_name,
+                                "entity_id": conflict.entity_id,
+                                "values": conflict.values,
+                            },
+                        )
+                    )
+
+                # Collect claim conflicts
+                for conflict in analysis_result.claim_conflicts:
+                    all_claim_conflicts.append(
+                        JurisConflictSummary(
+                            conflict_type="claim",
+                            severity=conflict.severity.value,
+                            reason=conflict.reason,
+                            affected_ids=[str(cid) for cid in conflict.claim_ids],
+                            details={
+                                "predicate": conflict.predicate,
+                                "subject": conflict.subject,
+                                "values": conflict.values,
+                            },
+                        )
+                    )
+
+                # Collect open questions
+                for question in analysis_result.open_questions:
+                    all_open_questions.append(
+                        JurisOpenQuestionSummary(
+                            category=question.category.value,
+                            question=question.question,
+                            context=question.context,
+                            related_ids=[
+                                str(mid) for mid in question.related_metric_ids
+                            ] + [str(cid) for cid in question.related_claim_ids],
+                        )
+                    )
+            except Exception:
+                # Quality analysis failure shouldn't break the pack retrieval
+                pass
+
+        conflicts = all_metric_conflicts + all_claim_conflicts
+        open_questions = all_open_questions
+
+        # Build quality summary
+        critical_count = sum(1 for c in conflicts if c.severity == "critical")
+        high_count = sum(1 for c in conflicts if c.severity == "high")
+
+        quality_summary = JurisQualitySummary(
+            total_conflicts=len(conflicts),
+            critical_conflicts=critical_count,
+            high_conflicts=high_count,
+            total_open_questions=len(open_questions),
+        )
+
+    return JurisEvidencePackResponse(
+        id=pack.id,
+        project_id=pack.project_id,
+        name=pack.name,
+        description=pack.description,
+        created_by=pack.created_by,
+        created_at=pack.created_at,
+        updated_at=pack.updated_at,
+        documents=list(documents_map.values()),
+        spans=list(spans_map.values()),
+        claims=claims_list,
+        metrics=metrics_list,
+        conflicts=conflicts,
+        open_questions=open_questions,
+        quality_summary=quality_summary,
+        document_count=len(documents_map),
+        span_count=len(spans_map),
+        claim_count=len(claims_list),
+        metric_count=len(metrics_list),
+        metadata=pack.metadata_,
+    )

@@ -25,6 +25,8 @@ from evidence_repository.schemas.document import (
     ExtractionTriggerResponse,
     VersionUploadResponse,
 )
+from evidence_repository.schemas.quality import QualityAnalysisResponse
+from evidence_repository.services.quality_analysis import QualityAnalysisService
 from evidence_repository.storage.base import StorageBackend
 
 router = APIRouter()
@@ -622,3 +624,61 @@ async def delete_document(
     ingestion = IngestionService(storage=storage, db=db)
     await ingestion.soft_delete_document(document)
     await db.commit()
+
+
+@router.get(
+    "/{document_id}/quality",
+    response_model=QualityAnalysisResponse,
+    summary="Analyze Document Quality",
+    description="""
+Analyze the quality of extracted facts for a document.
+
+Detects:
+- **Metric Conflicts**: Same metric with overlapping time period but different values
+- **Claim Conflicts**: Same boolean claim (e.g., has_soc2) with contradicting values
+- **Open Questions**: Missing units, currency, periods, or stale financial data (>12 months old)
+
+Returns a summary with counts and detailed lists of each issue.
+    """,
+)
+async def analyze_document_quality(
+    document_id: uuid.UUID,
+    version_id: uuid.UUID | None = Query(
+        default=None, description="Specific version to analyze (defaults to latest)"
+    ),
+    profile_id: uuid.UUID | None = Query(
+        default=None, description="Filter by extraction profile"
+    ),
+    level_id: uuid.UUID | None = Query(
+        default=None, description="Filter by extraction level"
+    ),
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> QualityAnalysisResponse:
+    """Analyze quality of extracted facts for a document.
+
+    Detects conflicts between metrics and claims, and identifies
+    open questions about missing or stale data.
+    """
+    # Check document exists
+    result = await db.execute(
+        select(Document).where(Document.id == document_id, Document.deleted_at.is_(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    # Run quality analysis
+    service = QualityAnalysisService(db=db)
+    analysis_result = await service.analyze_document(
+        document_id=document_id,
+        version_id=version_id,
+        profile_id=profile_id,
+        level_id=level_id,
+    )
+
+    return QualityAnalysisResponse.from_analysis_result(analysis_result)

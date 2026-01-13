@@ -138,6 +138,7 @@ def _dispatch_job(job: Job, db: Session) -> dict[str, Any]:
         task_ingest_document,
         task_ingest_from_url,
         task_process_document_full,
+        task_process_document_version,
     )
 
     payload = job.payload or {}
@@ -206,6 +207,27 @@ def _dispatch_job(job: Job, db: Session) -> dict[str, Any]:
             return _run_task(task_extract_document, payload, ["document_id", "version_id"])
         else:
             return _run_task(task_embed_document, payload, ["document_id", "version_id"])
+
+    elif job.type == JobType.PROCESS_DOCUMENT_VERSION:
+        return _run_task(task_process_document_version, payload, [
+            "version_id", "project_id", "profile_code", "extraction_level",
+            "skip_extraction", "skip_spans", "skip_embeddings", "skip_facts",
+            "skip_quality", "reprocess"
+        ])
+
+    elif job.type == JobType.FACT_EXTRACT:
+        # Fact extraction reuses the version pipeline but only runs fact step
+        return _run_task(task_process_document_version, payload, [
+            "version_id", "project_id", "profile_code", "extraction_level",
+            "skip_extraction", "skip_spans", "skip_embeddings", "skip_quality"
+        ])
+
+    elif job.type == JobType.QUALITY_CHECK:
+        # Quality check reuses the version pipeline but only runs quality step
+        return _run_task(task_process_document_version, payload, [
+            "version_id", "project_id", "skip_extraction", "skip_spans",
+            "skip_embeddings", "skip_facts"
+        ])
 
     else:
         raise ValueError(f"Unknown job type: {job.type}")

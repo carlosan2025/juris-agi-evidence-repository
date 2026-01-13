@@ -60,6 +60,10 @@ class JobQueue:
         JobType.BULK_URL_INGEST: "evidence_repository.queue.tasks.task_ingest_from_url",
         JobType.BATCH_EXTRACT: "evidence_repository.queue.tasks.task_extract_document",
         JobType.BATCH_EMBED: "evidence_repository.queue.tasks.task_embed_document",
+        # Version processing pipeline
+        JobType.PROCESS_DOCUMENT_VERSION: "evidence_repository.queue.tasks.task_process_document_version",
+        JobType.FACT_EXTRACT: "evidence_repository.queue.tasks.task_process_document_version",
+        JobType.QUALITY_CHECK: "evidence_repository.queue.tasks.task_process_document_version",
     }
 
     def __init__(

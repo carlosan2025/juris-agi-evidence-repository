@@ -8,6 +8,13 @@ from typing import Generator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+
+
+def pytest_configure(config):
+    """Configure pytest with custom markers."""
+    config.addinivalue_line(
+        "markers", "integration: mark test as integration test (requires running services)"
+    )
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 

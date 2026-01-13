@@ -16,12 +16,37 @@ from evidence_repository.models.document import Document, DocumentVersion, Extra
 from evidence_repository.models.embedding import EmbeddingChunk
 from evidence_repository.models.extraction import ExtractionRun, ExtractionRunStatus
 from evidence_repository.models.evidence import (
+    Certainty,
     Claim,
+    ClaimType,
     EvidencePack,
     EvidencePackItem,
     Metric,
+    MetricType,
+    Reliability,
     Span,
     SpanType,
+)
+from evidence_repository.models.extraction_level import (
+    ComputeMode,
+    ExtractionLevel,
+    ExtractionLevelCode,
+    ExtractionProfile,
+    ExtractionProfileCode,
+    ExtractionRunStatus as MultiLevelExtractionRunStatus,
+    ExtractionRun as MultiLevelExtractionRun,
+    ExtractionSetting,
+    ScopeType,
+)
+from evidence_repository.models.facts import (
+    ConstraintType,
+    FactCertainty,
+    FactClaim,
+    FactConstraint,
+    FactMetric,
+    FactRisk,
+    RiskSeverity,
+    SourceReliability,
 )
 from evidence_repository.models.ingestion import (
     IngestionBatch,
@@ -32,6 +57,12 @@ from evidence_repository.models.ingestion import (
 )
 from evidence_repository.models.job import Job, JobStatus, JobType
 from evidence_repository.models.project import Project, ProjectDocument
+from evidence_repository.models.quality import (
+    ConflictSeverity as QualityConflictSeverity,
+    QuestionCategory as QualityQuestionCategory,
+    QualityConflict,
+    QualityOpenQuestion,
+)
 
 __all__ = [
     # Base
@@ -59,10 +90,14 @@ __all__ = [
     "Span",
     "SpanType",
     "Claim",
+    "ClaimType",
     "Metric",
+    "MetricType",
+    "Certainty",
+    "Reliability",
     "EvidencePack",
     "EvidencePackItem",
-    # Analysis
+    # Analysis (legacy)
     "Conflict",
     "ConflictType",
     "ConflictStatus",
@@ -73,9 +108,33 @@ __all__ = [
     "QuestionStatus",
     # Embedding
     "EmbeddingChunk",
-    # Extraction
+    # Extraction (legacy)
     "ExtractionRun",
     "ExtractionRunStatus",
+    # Multi-level Extraction
+    "ExtractionProfile",
+    "ExtractionProfileCode",
+    "ExtractionLevel",
+    "ExtractionLevelCode",
+    "ExtractionSetting",
+    "MultiLevelExtractionRun",
+    "MultiLevelExtractionRunStatus",
+    "ComputeMode",
+    "ScopeType",
+    # Facts
+    "FactClaim",
+    "FactMetric",
+    "FactConstraint",
+    "FactRisk",
+    "FactCertainty",
+    "SourceReliability",
+    "ConstraintType",
+    "RiskSeverity",
+    # Quality
+    "QualityConflict",
+    "QualityOpenQuestion",
+    "QualityConflictSeverity",
+    "QualityQuestionCategory",
     # Audit
     "AuditLog",
     "AuditAction",

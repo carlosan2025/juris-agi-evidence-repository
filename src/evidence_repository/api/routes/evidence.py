@@ -608,3 +608,216 @@ async def delete_evidence_pack(
 
 # Import datetime for export endpoint
 from datetime import datetime
+
+
+# =============================================================================
+# Evidence Pack with LOD Support
+# =============================================================================
+
+
+@router.get(
+    "/evidence-packs/{pack_id}/with-facts",
+    summary="Get Evidence Pack with Multi-Level Facts",
+    description="Get evidence pack enriched with facts at specified profile/level.",
+)
+async def get_evidence_pack_with_facts(
+    pack_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    profile_code: str = Query("general", description="Extraction profile"),
+    level: int = Query(2, ge=1, le=4, description="Extraction level 1-4"),
+) -> dict:
+    """Get evidence pack enriched with multi-level extracted facts.
+
+    This endpoint retrieves an evidence pack and enriches each item with
+    relevant facts (claims, metrics, constraints, risks) extracted at the
+    specified profile and level of detail.
+    """
+    from evidence_repository.models.extraction_level import (
+        ExtractionLevel,
+        ExtractionLevelCode,
+        ExtractionProfile,
+        ExtractionProfileCode,
+    )
+    from evidence_repository.models.facts import (
+        FactClaim,
+        FactMetric,
+        FactConstraint,
+        FactRisk,
+    )
+
+    # Get the evidence pack
+    result = await db.execute(
+        select(EvidencePack)
+        .options(
+            selectinload(EvidencePack.items)
+            .selectinload(EvidencePackItem.span)
+            .selectinload(Span.document_version),
+            selectinload(EvidencePack.items)
+            .selectinload(EvidencePackItem.claim),
+            selectinload(EvidencePack.items)
+            .selectinload(EvidencePackItem.metric),
+        )
+        .where(EvidencePack.id == pack_id)
+    )
+    pack = result.scalar_one_or_none()
+
+    if not pack:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evidence pack {pack_id} not found",
+        )
+
+    # Get profile and level IDs
+    try:
+        pc = ExtractionProfileCode(profile_code)
+    except ValueError:
+        pc = ExtractionProfileCode.GENERAL
+
+    profile_stmt = select(ExtractionProfile.id).where(ExtractionProfile.code == pc)
+    profile_result = await db.execute(profile_stmt)
+    profile_id = profile_result.scalar_one_or_none()
+
+    level_mapping = {
+        1: ExtractionLevelCode.L1_BASIC,
+        2: ExtractionLevelCode.L2_STANDARD,
+        3: ExtractionLevelCode.L3_DEEP,
+        4: ExtractionLevelCode.L4_FORENSIC,
+    }
+    level_code = level_mapping.get(level, ExtractionLevelCode.L2_STANDARD)
+
+    level_stmt = select(ExtractionLevel.id).where(ExtractionLevel.code == level_code)
+    level_result = await db.execute(level_stmt)
+    level_id = level_result.scalar_one_or_none()
+
+    # Build export structure with facts
+    export_items = []
+    for item in pack.items:
+        version_id = item.span.document_version_id
+
+        # Get facts for this version at specified profile/level
+        fact_claims = []
+        fact_metrics = []
+        fact_constraints = []
+        fact_risks = []
+
+        if profile_id and level_id:
+            # Query facts
+            claims_stmt = select(FactClaim).where(
+                FactClaim.version_id == version_id,
+                FactClaim.profile_id == profile_id,
+                FactClaim.level_id == level_id,
+            ).limit(50)
+            claims_result = await db.execute(claims_stmt)
+            for claim in claims_result.scalars():
+                fact_claims.append({
+                    "id": str(claim.id),
+                    "subject": claim.subject,
+                    "predicate": claim.predicate,
+                    "object": claim.object,
+                    "claim_type": claim.claim_type,
+                    "certainty": claim.certainty.value,
+                    "evidence_quote": claim.evidence_quote,
+                })
+
+            metrics_stmt = select(FactMetric).where(
+                FactMetric.version_id == version_id,
+                FactMetric.profile_id == profile_id,
+                FactMetric.level_id == level_id,
+            ).limit(50)
+            metrics_result = await db.execute(metrics_stmt)
+            for metric in metrics_result.scalars():
+                fact_metrics.append({
+                    "id": str(metric.id),
+                    "metric_name": metric.metric_name,
+                    "value_numeric": metric.value_numeric,
+                    "value_raw": metric.value_raw,
+                    "unit": metric.unit,
+                    "currency": metric.currency,
+                    "certainty": metric.certainty.value,
+                })
+
+            constraints_stmt = select(FactConstraint).where(
+                FactConstraint.version_id == version_id,
+                FactConstraint.profile_id == profile_id,
+                FactConstraint.level_id == level_id,
+            ).limit(20)
+            constraints_result = await db.execute(constraints_stmt)
+            for constraint in constraints_result.scalars():
+                fact_constraints.append({
+                    "id": str(constraint.id),
+                    "constraint_type": constraint.constraint_type.value,
+                    "statement": constraint.statement,
+                    "applies_to": constraint.applies_to,
+                })
+
+            risks_stmt = select(FactRisk).where(
+                FactRisk.version_id == version_id,
+                FactRisk.profile_id == profile_id,
+                FactRisk.level_id == level_id,
+            ).limit(20)
+            risks_result = await db.execute(risks_stmt)
+            for risk in risks_result.scalars():
+                fact_risks.append({
+                    "id": str(risk.id),
+                    "risk_type": risk.risk_type,
+                    "severity": risk.severity.value,
+                    "statement": risk.statement,
+                    "rationale": risk.rationale,
+                })
+
+        export_item = {
+            "order": item.order_index,
+            "notes": item.notes,
+            "span": {
+                "id": str(item.span.id),
+                "text": item.span.text_content,
+                "type": item.span.span_type.value,
+                "locator": item.span.start_locator,
+                "document_version_id": str(item.span.document_version_id),
+            },
+            "facts": {
+                "claims": fact_claims,
+                "metrics": fact_metrics,
+                "constraints": fact_constraints,
+                "risks": fact_risks,
+            },
+        }
+
+        if item.claim:
+            export_item["legacy_claim"] = {
+                "id": str(item.claim.id),
+                "text": item.claim.claim_text,
+                "type": item.claim.claim_type.value if hasattr(item.claim.claim_type, "value") else str(item.claim.claim_type),
+                "confidence": item.claim.confidence,
+            }
+
+        if item.metric:
+            export_item["legacy_metric"] = {
+                "id": str(item.metric.id),
+                "name": item.metric.metric_name,
+                "value": item.metric.metric_value,
+                "unit": item.metric.unit,
+            }
+
+        export_items.append(export_item)
+
+    return {
+        "evidence_pack": {
+            "id": str(pack.id),
+            "name": pack.name,
+            "description": pack.description,
+            "project_id": str(pack.project_id),
+            "created_at": pack.created_at.isoformat(),
+            "created_by": pack.created_by,
+        },
+        "extraction_context": {
+            "profile_code": profile_code,
+            "level": level,
+            "profile_id": str(profile_id) if profile_id else None,
+            "level_id": str(level_id) if level_id else None,
+        },
+        "items": export_items,
+        "item_count": len(export_items),
+        "retrieved_at": datetime.utcnow().isoformat(),
+    }

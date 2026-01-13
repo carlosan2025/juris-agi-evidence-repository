@@ -32,6 +32,9 @@ class JobType(str, enum.Enum):
     DOCUMENT_EMBED = "document_embed"
     DOCUMENT_PROCESS_FULL = "document_process_full"
 
+    # Version processing pipeline (idempotent 5-step pipeline)
+    PROCESS_DOCUMENT_VERSION = "process_document_version"
+
     # Bulk operations
     BULK_FOLDER_INGEST = "bulk_folder_ingest"
     BULK_URL_INGEST = "bulk_url_ingest"
@@ -42,6 +45,10 @@ class JobType(str, enum.Enum):
     SPAN_EXTRACT = "span_extract"
     CLAIM_EXTRACT = "claim_extract"
     METRIC_EXTRACT = "metric_extract"
+    FACT_EXTRACT = "fact_extract"
+
+    # Quality analysis
+    QUALITY_CHECK = "quality_check"
 
     # Maintenance
     CLEANUP = "cleanup"

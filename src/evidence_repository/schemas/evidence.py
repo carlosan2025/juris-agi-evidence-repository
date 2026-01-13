@@ -42,16 +42,45 @@ class SpreadsheetLocator(BaseModel):
 
 
 class TextLocator(BaseModel):
-    """Locator for plain text documents."""
+    """Locator for plain text/PDF documents with character offsets."""
 
     type: Literal["text"] = "text"
-    char_offset_start: int = Field(..., ge=0, description="Start character offset")
-    char_offset_end: int = Field(..., ge=0, description="End character offset")
-    line_start: int | None = Field(default=None, ge=1, description="Start line number")
-    line_end: int | None = Field(default=None, ge=1, description="End line number")
+    offset_start: int = Field(..., ge=0, description="Start character offset")
+    offset_end: int = Field(..., ge=0, description="End character offset")
+    page_hint: int | None = Field(default=None, ge=1, description="Page number hint")
 
 
-LocatorSchema = PDFLocator | SpreadsheetLocator | TextLocator
+class CsvLocator(BaseModel):
+    """Locator for CSV files with row/column ranges."""
+
+    type: Literal["csv"] = "csv"
+    row_start: int = Field(..., ge=0, description="Start row index (0-based)")
+    row_end: int = Field(..., ge=0, description="End row index (exclusive)")
+    col_start: int = Field(default=0, ge=0, description="Start column index")
+    col_end: int = Field(..., ge=0, description="End column index (exclusive)")
+    table_index: int | None = Field(default=None, description="Table index if multiple")
+
+
+class ExcelLocator(BaseModel):
+    """Locator for Excel files with sheet and cell range."""
+
+    type: Literal["excel"] = "excel"
+    sheet: str = Field(..., description="Sheet name")
+    cell_range: str = Field(..., description="Cell range (e.g., 'A2:D10')")
+
+
+class ImageLocator(BaseModel):
+    """Locator for image files."""
+
+    type: Literal["image"] = "image"
+    filename: str = Field(..., description="Image filename")
+    image_index: int = Field(default=0, ge=0, description="Image index")
+    width: int | None = Field(default=None, description="Image width in pixels")
+    height: int | None = Field(default=None, description="Image height in pixels")
+    page_number: int | None = Field(default=None, description="Source page number")
+
+
+LocatorSchema = PDFLocator | SpreadsheetLocator | TextLocator | CsvLocator | ExcelLocator | ImageLocator
 
 
 # =============================================================================

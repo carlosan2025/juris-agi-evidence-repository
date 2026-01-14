@@ -67,6 +67,8 @@ dev = [
 [project.scripts]
 evidence-api = "evidence_repository.main:run"
 evidence-worker = "evidence_repository.digestion.polling_worker:main"
+# Vercel looks for this entry point
+app = "evidence_repository.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/evidence_repository"]

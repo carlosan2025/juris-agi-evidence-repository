@@ -17,9 +17,9 @@ from evidence_repository.models.extraction_level import (
     ExtractionLevelCode,
     ExtractionProfile,
     ExtractionProfileCode,
-    ExtractionRun,
     ExtractionRunStatus,
     ExtractionSetting,
+    FactExtractionRun,
     ProcessContext,
     ScopeType,
 )
@@ -517,12 +517,12 @@ async def trigger_extraction(
         process_ctx = ProcessContext.UNSPECIFIED
 
     # Check for existing active run (now includes process_context)
-    existing_stmt = select(ExtractionRun).where(
-        ExtractionRun.version_id == request.version_id,
-        ExtractionRun.profile_id == profile.id,
-        ExtractionRun.process_context == process_ctx,
-        ExtractionRun.level_id == level.id,
-        ExtractionRun.status.in_([ExtractionRunStatus.QUEUED, ExtractionRunStatus.RUNNING]),
+    existing_stmt = select(FactExtractionRun).where(
+        FactExtractionRun.version_id == request.version_id,
+        FactExtractionRun.profile_id == profile.id,
+        FactExtractionRun.process_context == process_ctx,
+        FactExtractionRun.level_id == level.id,
+        FactExtractionRun.status.in_([ExtractionRunStatus.QUEUED, ExtractionRunStatus.RUNNING]),
     )
     existing_result = await db.execute(existing_stmt)
     existing = existing_result.scalar_one_or_none()
@@ -545,7 +545,7 @@ async def trigger_extraction(
         )
 
     # Create new run record
-    run = ExtractionRun(
+    run = FactExtractionRun(
         document_id=version.document_id,
         version_id=request.version_id,
         profile_id=profile.id,
@@ -598,13 +598,13 @@ async def list_runs(
 ):
     """List extraction runs for a document version."""
     stmt = (
-        select(ExtractionRun)
-        .where(ExtractionRun.version_id == version_id)
+        select(FactExtractionRun)
+        .where(FactExtractionRun.version_id == version_id)
         .options(
-            selectinload(ExtractionRun.profile),
-            selectinload(ExtractionRun.level),
+            selectinload(FactExtractionRun.profile),
+            selectinload(FactExtractionRun.level),
         )
-        .order_by(ExtractionRun.created_at.desc())
+        .order_by(FactExtractionRun.created_at.desc())
     )
 
     if profile_code:
@@ -614,7 +614,7 @@ async def list_runs(
             profile_result = await db.execute(profile_stmt)
             profile_id = profile_result.scalar_one_or_none()
             if profile_id:
-                stmt = stmt.where(ExtractionRun.profile_id == profile_id)
+                stmt = stmt.where(FactExtractionRun.profile_id == profile_id)
         except ValueError:
             pass
 
@@ -631,12 +631,12 @@ async def list_runs(
             level_result = await db.execute(level_stmt)
             level_id = level_result.scalar_one_or_none()
             if level_id:
-                stmt = stmt.where(ExtractionRun.level_id == level_id)
+                stmt = stmt.where(FactExtractionRun.level_id == level_id)
 
     if status:
         try:
             st = ExtractionRunStatus(status)
-            stmt = stmt.where(ExtractionRun.status == st)
+            stmt = stmt.where(FactExtractionRun.status == st)
         except ValueError:
             pass
 
@@ -708,15 +708,15 @@ async def get_run_results(
 
     # Get latest successful run
     run_stmt = (
-        select(ExtractionRun)
+        select(FactExtractionRun)
         .where(
-            ExtractionRun.version_id == version_id,
-            ExtractionRun.profile_id == profile.id,
-            ExtractionRun.process_context == process_ctx,
-            ExtractionRun.level_id == level_record.id,
-            ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+            FactExtractionRun.version_id == version_id,
+            FactExtractionRun.profile_id == profile.id,
+            FactExtractionRun.process_context == process_ctx,
+            FactExtractionRun.level_id == level_record.id,
+            FactExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
         )
-        .order_by(ExtractionRun.finished_at.desc())
+        .order_by(FactExtractionRun.finished_at.desc())
         .limit(1)
     )
     run_result = await db.execute(run_stmt)

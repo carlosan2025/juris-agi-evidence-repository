@@ -34,8 +34,8 @@ from evidence_repository.models.extraction_level import (
     ExtractionLevelCode,
     ExtractionProfile,
     ExtractionProfileCode,
-    ExtractionRun,
     ExtractionRunStatus,
+    FactExtractionRun,
     ProcessContext,
 )
 from evidence_repository.models.facts import (
@@ -92,7 +92,7 @@ class MultiLevelExtractionService:
         triggered_by: str | None = None,
         schema_version: str = "1.0",
         vocab_version: str = "1.0",
-    ) -> ExtractionRun:
+    ) -> FactExtractionRun:
         """Run extraction for a document version at specified profile/context/level.
 
         Args:
@@ -139,7 +139,7 @@ class MultiLevelExtractionService:
             return existing_run
 
         # Create extraction run
-        run = ExtractionRun(
+        run = FactExtractionRun(
             document_id=version.document_id,
             version_id=version_id,
             profile_id=profile.id,
@@ -276,14 +276,14 @@ class MultiLevelExtractionService:
         profile_id: uuid.UUID,
         process_context: ProcessContext,
         level_id: uuid.UUID,
-    ) -> ExtractionRun | None:
+    ) -> FactExtractionRun | None:
         """Check for existing active extraction run."""
-        stmt = select(ExtractionRun).where(
-            ExtractionRun.version_id == version_id,
-            ExtractionRun.profile_id == profile_id,
-            ExtractionRun.process_context == process_context,
-            ExtractionRun.level_id == level_id,
-            ExtractionRun.status.in_([
+        stmt = select(FactExtractionRun).where(
+            FactExtractionRun.version_id == version_id,
+            FactExtractionRun.profile_id == profile_id,
+            FactExtractionRun.process_context == process_context,
+            FactExtractionRun.level_id == level_id,
+            FactExtractionRun.status.in_([
                 ExtractionRunStatus.QUEUED,
                 ExtractionRunStatus.RUNNING,
             ]),
@@ -301,12 +301,12 @@ class MultiLevelExtractionService:
         """Get results from previous level extraction for incremental extraction."""
         level_record = await self._get_or_create_level(session, level)
 
-        stmt = select(ExtractionRun).where(
-            ExtractionRun.version_id == version_id,
-            ExtractionRun.profile_id == profile_id,
-            ExtractionRun.level_id == level_record.id,
-            ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
-        ).order_by(ExtractionRun.finished_at.desc()).limit(1)
+        stmt = select(FactExtractionRun).where(
+            FactExtractionRun.version_id == version_id,
+            FactExtractionRun.profile_id == profile_id,
+            FactExtractionRun.level_id == level_record.id,
+            FactExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+        ).order_by(FactExtractionRun.finished_at.desc()).limit(1)
 
         result = await session.execute(stmt)
         run = result.scalar_one_or_none()
@@ -385,7 +385,7 @@ class MultiLevelExtractionService:
     async def _persist_results(
         self,
         session: AsyncSession,
-        run: ExtractionRun,
+        run: FactExtractionRun,
         result: MultiLevelExtractionResult,
     ) -> None:
         """Persist extraction results to database."""

@@ -23,9 +23,9 @@ from evidence_repository.models.extraction_level import (
     ExtractionLevelCode,
     ExtractionProfile,
     ExtractionProfileCode,
-    ExtractionRun,
     ExtractionRunStatus,
     ExtractionSetting,
+    FactExtractionRun,
     ProcessContext,
     ScopeType,
 )
@@ -257,7 +257,7 @@ class ExtractionOrchestrator:
         self,
         session: AsyncSession,
         job: ExtractionJob,
-    ) -> ExtractionRun:
+    ) -> FactExtractionRun:
         """Create an extraction run record from a job specification.
 
         Args:
@@ -286,7 +286,7 @@ class ExtractionOrchestrator:
             process_ctx = ProcessContext.UNSPECIFIED
 
         # Create run record
-        run = ExtractionRun(
+        run = FactExtractionRun(
             document_id=version.document_id,
             version_id=job.version_id,
             profile_id=profile.id,
@@ -481,18 +481,18 @@ class ExtractionOrchestrator:
         profile_id: uuid.UUID,
         process_context: ProcessContext,
         level_id: uuid.UUID,
-    ) -> ExtractionRun | None:
+    ) -> FactExtractionRun | None:
         """Get completed extraction run for given parameters."""
         stmt = (
-            select(ExtractionRun)
+            select(FactExtractionRun)
             .where(
-                ExtractionRun.version_id == version_id,
-                ExtractionRun.profile_id == profile_id,
-                ExtractionRun.process_context == process_context,
-                ExtractionRun.level_id == level_id,
-                ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+                FactExtractionRun.version_id == version_id,
+                FactExtractionRun.profile_id == profile_id,
+                FactExtractionRun.process_context == process_context,
+                FactExtractionRun.level_id == level_id,
+                FactExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
             )
-            .order_by(ExtractionRun.finished_at.desc())
+            .order_by(FactExtractionRun.finished_at.desc())
             .limit(1)
         )
         result = await session.execute(stmt)
@@ -505,14 +505,14 @@ class ExtractionOrchestrator:
         profile_id: uuid.UUID,
         process_context: ProcessContext,
         level_id: uuid.UUID,
-    ) -> ExtractionRun | None:
+    ) -> FactExtractionRun | None:
         """Get active (queued/running) extraction run for given parameters."""
-        stmt = select(ExtractionRun).where(
-            ExtractionRun.version_id == version_id,
-            ExtractionRun.profile_id == profile_id,
-            ExtractionRun.process_context == process_context,
-            ExtractionRun.level_id == level_id,
-            ExtractionRun.status.in_([
+        stmt = select(FactExtractionRun).where(
+            FactExtractionRun.version_id == version_id,
+            FactExtractionRun.profile_id == profile_id,
+            FactExtractionRun.process_context == process_context,
+            FactExtractionRun.level_id == level_id,
+            FactExtractionRun.status.in_([
                 ExtractionRunStatus.QUEUED,
                 ExtractionRunStatus.RUNNING,
             ]),

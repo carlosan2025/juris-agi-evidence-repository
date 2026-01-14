@@ -20,6 +20,7 @@ from evidence_repository.models.extraction_level import (
     ExtractionRun,
     ExtractionRunStatus,
     ExtractionSetting,
+    ProcessContext,
     ScopeType,
 )
 from evidence_repository.models.facts import (
@@ -71,6 +72,7 @@ class ExtractionSettingCreate(BaseModel):
     scope_type: str = Field(..., description="project or document_version")
     scope_id: uuid.UUID
     profile_code: str = Field("general", description="Profile code")
+    process_context: str = Field("unspecified", description="Process context (e.g., vc.ic_decision)")
     level: int = Field(2, ge=1, le=4, description="Extraction level 1-4")
     compute_mode: str = Field("exact_only", description="exact_only or all_up_to")
     is_enabled: bool = True
@@ -84,6 +86,7 @@ class ExtractionSettingResponse(BaseModel):
     scope_id: uuid.UUID
     profile_id: uuid.UUID
     profile_code: str
+    process_context: str
     level_id: uuid.UUID
     level_rank: int
     compute_mode: str
@@ -93,6 +96,19 @@ class ExtractionSettingResponse(BaseModel):
         from_attributes = True
 
 
+class EffectiveExtractionSettingResponse(BaseModel):
+    """Effective extraction setting (resolved from project + document overrides)."""
+
+    profile_code: str
+    process_context: str
+    level_rank: int
+    compute_mode: str
+    is_enabled: bool
+    source: str = Field(..., description="Where this setting came from: project, document_version, or default")
+    project_setting_id: uuid.UUID | None = None
+    document_setting_id: uuid.UUID | None = None
+
+
 class ExtractionRunResponse(BaseModel):
     """Extraction run response."""
 
@@ -100,8 +116,11 @@ class ExtractionRunResponse(BaseModel):
     document_id: uuid.UUID
     version_id: uuid.UUID
     profile_code: str
+    process_context: str
     level_rank: int
     status: str
+    schema_version: str
+    vocab_version: str
     started_at: str | None
     finished_at: str | None
     error: str | None
@@ -116,6 +135,7 @@ class TriggerExtractionRequest(BaseModel):
 
     version_id: uuid.UUID
     profile_code: str = Field("general")
+    process_context: str = Field("unspecified", description="Process context (e.g., vc.ic_decision)")
     level: int = Field(2, ge=1, le=4)
     compute_missing_levels: bool = Field(
         False, description="Compute all missing levels up to requested"
@@ -127,6 +147,7 @@ class ExtractionResultsResponse(BaseModel):
 
     run_id: uuid.UUID
     profile_code: str
+    process_context: str
     level: int
     claims_count: int
     metrics_count: int
@@ -357,10 +378,107 @@ async def get_setting(
         scope_id=setting.scope_id,
         profile_id=setting.profile_id,
         profile_code=setting.profile.code.value,
+        process_context="unspecified",  # TODO: Add process_context to ExtractionSetting model
         level_id=setting.level_id,
         level_rank=setting.level.rank,
         compute_mode=setting.compute_mode.value,
         is_enabled=setting.is_enabled,
+    )
+
+
+@router.get(
+    "/settings/effective/{version_id}",
+    response_model=EffectiveExtractionSettingResponse,
+)
+async def get_effective_setting(
+    version_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Get effective extraction settings for a document version.
+
+    Resolves settings by checking:
+    1. Document-version specific override (highest priority)
+    2. Project default
+    3. System default (general profile, L2_STANDARD, exact_only)
+    """
+    # Get the document version to find its project
+    version = await db.get(DocumentVersion, version_id)
+    if not version:
+        raise HTTPException(404, f"Version {version_id} not found")
+
+    # Import here to avoid circular imports
+    from evidence_repository.models.project import ProjectDocument
+
+    # Find the project for this document
+    project_doc_stmt = select(ProjectDocument).where(
+        ProjectDocument.document_id == version.document_id
+    )
+    project_doc_result = await db.execute(project_doc_stmt)
+    project_doc = project_doc_result.scalar_one_or_none()
+
+    project_id = project_doc.project_id if project_doc else None
+
+    # Check for document-version specific setting
+    doc_setting_stmt = (
+        select(ExtractionSetting)
+        .where(
+            ExtractionSetting.scope_type == ScopeType.DOCUMENT_VERSION,
+            ExtractionSetting.scope_id == version_id,
+        )
+        .options(
+            selectinload(ExtractionSetting.profile),
+            selectinload(ExtractionSetting.level),
+        )
+    )
+    doc_setting_result = await db.execute(doc_setting_stmt)
+    doc_setting = doc_setting_result.scalar_one_or_none()
+
+    if doc_setting:
+        return EffectiveExtractionSettingResponse(
+            profile_code=doc_setting.profile.code.value,
+            process_context="unspecified",  # Will be stored in setting
+            level_rank=doc_setting.level.rank,
+            compute_mode=doc_setting.compute_mode.value,
+            is_enabled=doc_setting.is_enabled,
+            source="document_version",
+            document_setting_id=doc_setting.id,
+        )
+
+    # Check for project default setting
+    if project_id:
+        project_setting_stmt = (
+            select(ExtractionSetting)
+            .where(
+                ExtractionSetting.scope_type == ScopeType.PROJECT,
+                ExtractionSetting.scope_id == project_id,
+            )
+            .options(
+                selectinload(ExtractionSetting.profile),
+                selectinload(ExtractionSetting.level),
+            )
+        )
+        project_setting_result = await db.execute(project_setting_stmt)
+        project_setting = project_setting_result.scalar_one_or_none()
+
+        if project_setting:
+            return EffectiveExtractionSettingResponse(
+                profile_code=project_setting.profile.code.value,
+                process_context="unspecified",
+                level_rank=project_setting.level.rank,
+                compute_mode=project_setting.compute_mode.value,
+                is_enabled=project_setting.is_enabled,
+                source="project",
+                project_setting_id=project_setting.id,
+            )
+
+    # Return system default
+    return EffectiveExtractionSettingResponse(
+        profile_code="general",
+        process_context="unspecified",
+        level_rank=2,
+        compute_mode="exact_only",
+        is_enabled=True,
+        source="default",
     )
 
 
@@ -392,10 +510,17 @@ async def trigger_extraction(
     profile = await service._get_or_create_profile(db, request.profile_code)
     level = await service._get_or_create_level(db, request.level)
 
-    # Check for existing active run
+    # Validate and parse process_context
+    try:
+        process_ctx = ProcessContext(request.process_context)
+    except ValueError:
+        process_ctx = ProcessContext.UNSPECIFIED
+
+    # Check for existing active run (now includes process_context)
     existing_stmt = select(ExtractionRun).where(
         ExtractionRun.version_id == request.version_id,
         ExtractionRun.profile_id == profile.id,
+        ExtractionRun.process_context == process_ctx,
         ExtractionRun.level_id == level.id,
         ExtractionRun.status.in_([ExtractionRunStatus.QUEUED, ExtractionRunStatus.RUNNING]),
     )
@@ -408,8 +533,11 @@ async def trigger_extraction(
             document_id=existing.document_id,
             version_id=existing.version_id,
             profile_code=profile.code.value,
+            process_context=existing.process_context.value,
             level_rank=level.rank,
             status=existing.status.value,
+            schema_version=existing.schema_version,
+            vocab_version=existing.vocab_version,
             started_at=existing.started_at.isoformat() if existing.started_at else None,
             finished_at=existing.finished_at.isoformat() if existing.finished_at else None,
             error=existing.error,
@@ -421,8 +549,11 @@ async def trigger_extraction(
         document_id=version.document_id,
         version_id=request.version_id,
         profile_id=profile.id,
+        process_context=process_ctx,
         level_id=level.id,
         status=ExtractionRunStatus.QUEUED,
+        schema_version="1.0",
+        vocab_version="1.0",
     )
     db.add(run)
     await db.commit()
@@ -435,6 +566,7 @@ async def trigger_extraction(
         task_multilevel_extract,
         version_id=str(request.version_id),
         profile_code=request.profile_code,
+        process_context=request.process_context,
         level=request.level,
         compute_missing_levels=request.compute_missing_levels,
     )
@@ -444,8 +576,11 @@ async def trigger_extraction(
         document_id=run.document_id,
         version_id=run.version_id,
         profile_code=profile.code.value,
+        process_context=run.process_context.value,
         level_rank=level.rank,
         status=run.status.value,
+        schema_version=run.schema_version,
+        vocab_version=run.vocab_version,
         started_at=None,
         finished_at=None,
         error=None,
@@ -514,8 +649,11 @@ async def list_runs(
             document_id=run.document_id,
             version_id=run.version_id,
             profile_code=run.profile.code.value,
+            process_context=run.process_context.value if run.process_context else "unspecified",
             level_rank=run.level.rank,
             status=run.status.value,
+            schema_version=run.schema_version if hasattr(run, 'schema_version') and run.schema_version else "1.0",
+            vocab_version=run.vocab_version if hasattr(run, 'vocab_version') and run.vocab_version else "1.0",
             started_at=run.started_at.isoformat() if run.started_at else None,
             finished_at=run.finished_at.isoformat() if run.finished_at else None,
             error=run.error,
@@ -530,9 +668,10 @@ async def get_run_results(
     version_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_code: str = Query("general"),
+    process_context: str = Query("unspecified"),
     level: int = Query(2, ge=1, le=4),
 ):
-    """Get extraction results summary for a specific profile/level."""
+    """Get extraction results summary for a specific profile/process_context/level."""
     # Get profile and level
     try:
         pc = ExtractionProfileCode(profile_code)
@@ -561,12 +700,19 @@ async def get_run_results(
     if not level_record:
         raise HTTPException(404, f"Level {level} not found")
 
+    # Parse process_context
+    try:
+        process_ctx = ProcessContext(process_context)
+    except ValueError:
+        process_ctx = ProcessContext.UNSPECIFIED
+
     # Get latest successful run
     run_stmt = (
         select(ExtractionRun)
         .where(
             ExtractionRun.version_id == version_id,
             ExtractionRun.profile_id == profile.id,
+            ExtractionRun.process_context == process_ctx,
             ExtractionRun.level_id == level_record.id,
             ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
         )
@@ -616,6 +762,7 @@ async def get_run_results(
     return ExtractionResultsResponse(
         run_id=run.id,
         profile_code=profile_code,
+        process_context=process_context,
         level=level,
         claims_count=len(claims_count),
         metrics_count=len(metrics_count),
@@ -636,13 +783,14 @@ async def get_claims(
     version_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_code: str = Query("general"),
+    process_context: str = Query("unspecified"),
     level: int = Query(2, ge=1, le=4),
     claim_type: str | None = Query(None),
     predicate: str | None = Query(None),
     limit: int = Query(100, le=500),
     offset: int = Query(0),
 ):
-    """Get extracted claims for a document version at specified profile/level."""
+    """Get extracted claims for a document version at specified profile/process_context/level."""
     # Get profile and level IDs
     try:
         pc = ExtractionProfileCode(profile_code)
@@ -671,12 +819,19 @@ async def get_claims(
     if not level_id:
         return []
 
+    # Parse process_context
+    try:
+        process_ctx = ProcessContext(process_context)
+    except ValueError:
+        process_ctx = ProcessContext.UNSPECIFIED
+
     # Query claims
     stmt = (
         select(FactClaim)
         .where(
             FactClaim.version_id == version_id,
             FactClaim.profile_id == profile_id,
+            FactClaim.process_context == process_ctx,
             FactClaim.level_id == level_id,
         )
         .order_by(FactClaim.created_at.desc())
@@ -715,13 +870,14 @@ async def get_metrics(
     version_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_code: str = Query("general"),
+    process_context: str = Query("unspecified"),
     level: int = Query(2, ge=1, le=4),
     metric_name: str | None = Query(None),
     metric_category: str | None = Query(None),
     limit: int = Query(100, le=500),
     offset: int = Query(0),
 ):
-    """Get extracted metrics for a document version at specified profile/level."""
+    """Get extracted metrics for a document version at specified profile/process_context/level."""
     # Get profile and level IDs
     try:
         pc = ExtractionProfileCode(profile_code)
@@ -750,12 +906,19 @@ async def get_metrics(
     if not level_id:
         return []
 
+    # Parse process_context
+    try:
+        process_ctx = ProcessContext(process_context)
+    except ValueError:
+        process_ctx = ProcessContext.UNSPECIFIED
+
     # Query metrics
     stmt = (
         select(FactMetric)
         .where(
             FactMetric.version_id == version_id,
             FactMetric.profile_id == profile_id,
+            FactMetric.process_context == process_ctx,
             FactMetric.level_id == level_id,
         )
         .order_by(FactMetric.created_at.desc())

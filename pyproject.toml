@@ -36,13 +36,21 @@ dependencies = [
     "aiofiles>=23.2.0",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
-    # Job queue (Redis + RQ)
+    # Serverless adapter for Vercel
+    "mangum>=0.17.0",
+    # Optional: Redis for faster job processing (Upstash compatible)
     "redis>=5.0.0",
-    "rq>=1.16.0",
+    "rq>=1.15.0",
     # File processing
     "openpyxl>=3.1.0",
     "pillow>=10.2.0",
     "pypdf>=4.0.0",
+    # Document parsers (Agent-K style)
+    "python-docx>=1.1.0",
+    "python-pptx>=0.6.23",
+    "beautifulsoup4>=4.12.0",
+    # S3-compatible storage (Cloudflare R2)
+    "boto3>=1.34.0",
 ]
 
 [project.optional-dependencies]
@@ -58,7 +66,7 @@ dev = [
 
 [project.scripts]
 evidence-api = "evidence_repository.main:run"
-evidence-worker = "evidence_repository.worker:run_worker"
+evidence-worker = "evidence_repository.digestion.polling_worker:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/evidence_repository"]

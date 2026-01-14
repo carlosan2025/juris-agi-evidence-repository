@@ -1612,26 +1612,32 @@ def task_extract_structured_batch(
 def task_multilevel_extract(
     version_id: str,
     profile_code: str = "general",
+    process_context: str = "unspecified",
     level: int = 2,
     triggered_by: str | None = None,
     compute_missing_levels: bool = False,
+    schema_version: str = "1.0",
+    vocab_version: str = "1.0",
 ) -> dict:
     """Run multi-level extraction for a document version.
 
     Extracts facts (claims, metrics, constraints, risks) at the specified
-    level of detail using domain-specific vocabularies.
+    level of detail using domain-specific vocabularies and process context.
 
     Args:
         version_id: Document version ID.
         profile_code: Extraction profile (general, vc, pharma, insurance).
+        process_context: Business process context (e.g., vc.ic_decision).
         level: Extraction level (1=basic, 2=standard, 3=deep, 4=forensic).
         triggered_by: User who triggered the extraction.
         compute_missing_levels: If True, compute all lower levels first.
+        schema_version: Schema version for output reproducibility.
+        vocab_version: Vocabulary version used.
 
     Returns:
         Dict with extraction run results.
     """
-    _update_progress(0, f"Starting L{level} {profile_code} extraction")
+    _update_progress(0, f"Starting L{level} {profile_code}/{process_context} extraction")
 
     settings = get_settings()
 
@@ -1667,13 +1673,17 @@ def task_multilevel_extract(
                                 session=session,
                                 version_id=ver_uuid,
                                 profile_code=profile_code,
+                                process_context=process_context,
                                 level=lvl,
                                 triggered_by=triggered_by,
+                                schema_version=schema_version,
+                                vocab_version=vocab_version,
                             )
                             results.append({
                                 "level": lvl,
                                 "run_id": str(run.id),
                                 "status": run.status.value,
+                                "process_context": process_context,
                             })
                         except Exception as e:
                             logger.warning(f"L{lvl} extraction failed: {e}")
@@ -1689,21 +1699,28 @@ def task_multilevel_extract(
                     session=session,
                     version_id=ver_uuid,
                     profile_code=profile_code,
+                    process_context=process_context,
                     level=level,
                     triggered_by=triggered_by,
+                    schema_version=schema_version,
+                    vocab_version=vocab_version,
                 )
 
                 results.append({
                     "level": level,
                     "run_id": str(run.id),
                     "status": run.status.value,
+                    "process_context": process_context,
                     "metadata": run.metadata_,
                 })
 
                 return {
                     "version_id": version_id,
                     "profile_code": profile_code,
+                    "process_context": process_context,
                     "requested_level": level,
+                    "schema_version": schema_version,
+                    "vocab_version": vocab_version,
                     "runs": results,
                 }
 
@@ -1726,21 +1743,27 @@ def task_multilevel_extract(
 def task_multilevel_extract_batch(
     version_ids: list[str],
     profile_code: str = "general",
+    process_context: str = "unspecified",
     level: int = 2,
     triggered_by: str | None = None,
+    schema_version: str = "1.0",
+    vocab_version: str = "1.0",
 ) -> dict:
     """Run multi-level extraction for multiple document versions.
 
     Args:
         version_ids: List of document version IDs.
         profile_code: Extraction profile.
+        process_context: Business process context.
         level: Extraction level.
         triggered_by: User who triggered the extraction.
+        schema_version: Schema version for output.
+        vocab_version: Vocabulary version used.
 
     Returns:
         Dict with batch results.
     """
-    _update_progress(0, f"Starting batch L{level} extraction for {len(version_ids)} versions")
+    _update_progress(0, f"Starting batch L{level} {process_context} extraction for {len(version_ids)} versions")
 
     results = []
     total = len(version_ids)
@@ -1753,9 +1776,12 @@ def task_multilevel_extract_batch(
             result = task_multilevel_extract(
                 version_id=ver_id,
                 profile_code=profile_code,
+                process_context=process_context,
                 level=level,
                 triggered_by=triggered_by,
                 compute_missing_levels=False,
+                schema_version=schema_version,
+                vocab_version=vocab_version,
             )
             results.append({
                 "version_id": ver_id,
@@ -1777,6 +1803,7 @@ def task_multilevel_extract_batch(
 
     return {
         "profile_code": profile_code,
+        "process_context": process_context,
         "level": level,
         "versions_processed": total,
         "successful": successful,
@@ -1804,6 +1831,7 @@ def task_process_document_version(
     version_id: str,
     project_id: str | None = None,
     profile_code: str = "general",
+    process_context: str = "unspecified",
     extraction_level: int = 2,
     skip_extraction: bool = False,
     skip_spans: bool = False,
@@ -1829,6 +1857,7 @@ def task_process_document_version(
         version_id: Document version ID to process.
         project_id: Optional project ID for fact association.
         profile_code: Extraction profile (general, vc, pharma, insurance).
+        process_context: Business process context (e.g., vc.ic_decision).
         extraction_level: Level of detail for fact extraction (1-4).
         skip_extraction: Skip text extraction step.
         skip_spans: Skip span building step.
@@ -1850,6 +1879,7 @@ def task_process_document_version(
         "version_id": version_id,
         "project_id": project_id,
         "profile_code": profile_code,
+        "process_context": process_context,
         "extraction_level": extraction_level,
         "steps_completed": [],
         "steps_skipped": [],
@@ -1934,7 +1964,7 @@ def task_process_document_version(
         # =====================================================================
         if not skip_facts and project_id:
             step_result = _pipeline_step_extract_facts(
-                db, version, project_id, profile_code, extraction_level, reprocess
+                db, version, project_id, profile_code, process_context, extraction_level, reprocess
             )
             result["extract_facts"] = step_result
             if step_result.get("status") == "completed":
@@ -2293,12 +2323,14 @@ def _pipeline_step_extract_facts(
     version,
     project_id: str,
     profile_code: str,
+    process_context: str,
     extraction_level: int,
     reprocess: bool,
 ) -> dict:
     """Step 4: Extract facts (metrics and claims) from spans.
 
-    Idempotent: Checks for existing extraction runs.
+    Idempotent: Checks for existing extraction runs for the given
+    (version, profile, process_context, level) tuple.
     """
     try:
         settings = get_settings()
@@ -2314,12 +2346,19 @@ def _pipeline_step_extract_facts(
                 ExtractionRunStatus,
                 ExtractionProfile,
                 ExtractionProfileCode,
+                ProcessContext,
             )
 
             engine = create_async_engine(settings.database_url)
             async_session_maker = async_sessionmaker(
                 engine, class_=AsyncSession, expire_on_commit=False
             )
+
+            # Parse process context
+            try:
+                process_ctx = ProcessContext(process_context)
+            except ValueError:
+                process_ctx = ProcessContext.UNSPECIFIED
 
             async with async_session_maker() as session:
                 service = MultiLevelExtractionService()
@@ -2339,10 +2378,11 @@ def _pipeline_step_extract_facts(
                     profile = profile_result.scalar_one_or_none()
 
                     if profile:
-                        # Check for existing successful run
+                        # Check for existing successful run with same process_context
                         existing_stmt = select(ExtractionRun).where(
                             ExtractionRun.version_id == version.id,
                             ExtractionRun.profile_id == profile.id,
+                            ExtractionRun.process_context == process_ctx,
                             ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
                         )
                         existing_result = await session.execute(existing_stmt)
@@ -2353,6 +2393,7 @@ def _pipeline_step_extract_facts(
                                 "status": "skipped",
                                 "reason": "extraction_exists",
                                 "existing_run_id": str(existing_run.id),
+                                "process_context": process_context,
                             }
 
                 # Run extraction
@@ -2360,6 +2401,7 @@ def _pipeline_step_extract_facts(
                     session=session,
                     version_id=version.id,
                     profile_code=profile_code,
+                    process_context=process_context,
                     level=extraction_level,
                     triggered_by="pipeline",
                 )
@@ -2368,6 +2410,7 @@ def _pipeline_step_extract_facts(
                     "status": "completed",
                     "run_id": str(run.id),
                     "run_status": run.status.value,
+                    "process_context": process_context,
                     "metadata": run.metadata_,
                 }
 
@@ -2442,24 +2485,31 @@ def _pipeline_step_quality_check(
 def task_upgrade_extraction_level(
     version_id: str,
     profile_code: str,
-    target_level: int,
+    process_context: str = "unspecified",
+    target_level: int = 2,
     triggered_by: str | None = None,
+    schema_version: str = "1.0",
+    vocab_version: str = "1.0",
 ) -> dict:
     """Upgrade extraction to a higher level.
 
-    Computes all missing levels up to the target level.
-    Never overwrites existing extraction results.
+    Computes all missing levels up to the target level for the given
+    (profile, process_context) combination. Never overwrites existing
+    extraction results.
 
     Args:
         version_id: Document version ID.
         profile_code: Extraction profile.
+        process_context: Business process context (e.g., vc.ic_decision).
         target_level: Target extraction level (1-4).
         triggered_by: User who triggered the upgrade.
+        schema_version: Schema version for output.
+        vocab_version: Vocabulary version used.
 
     Returns:
         Dict with upgrade results.
     """
-    _update_progress(0, f"Upgrading to L{target_level} extraction")
+    _update_progress(0, f"Upgrading to L{target_level} {process_context} extraction")
 
     settings = get_settings()
 
@@ -2478,12 +2528,19 @@ def task_upgrade_extraction_level(
                 ExtractionRunStatus,
                 ExtractionProfile,
                 ExtractionProfileCode,
+                ProcessContext,
             )
 
             engine = create_async_engine(settings.database_url)
             async_session_maker = sessionmaker(
                 engine, class_=AsyncSession, expire_on_commit=False
             )
+
+            # Parse process context
+            try:
+                process_ctx = ProcessContext(process_context)
+            except ValueError:
+                process_ctx = ProcessContext.UNSPECIFIED
 
             async with async_session_maker() as session:
                 service = MultiLevelExtractionService()
@@ -2504,10 +2561,11 @@ def task_upgrade_extraction_level(
                     # Create profile on first use
                     profile = await service._get_or_create_profile(session, profile_code)
 
-                # Check which levels already exist
+                # Check which levels already exist for this (profile, process_context)
                 existing_runs_stmt = select(ExtractionRun).where(
                     ExtractionRun.version_id == ver_uuid,
                     ExtractionRun.profile_id == profile.id,
+                    ExtractionRun.process_context == process_ctx,
                     ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
                 )
                 existing_result = await session.execute(existing_runs_stmt)
@@ -2532,6 +2590,7 @@ def task_upgrade_extraction_level(
                     return {
                         "version_id": version_id,
                         "profile_code": profile_code,
+                        "process_context": process_context,
                         "target_level": target_level,
                         "status": "already_complete",
                         "existing_levels": list(existing_levels),
@@ -2548,13 +2607,17 @@ def task_upgrade_extraction_level(
                             session=session,
                             version_id=ver_uuid,
                             profile_code=profile_code,
+                            process_context=process_context,
                             level=lvl,
                             triggered_by=triggered_by,
+                            schema_version=schema_version,
+                            vocab_version=vocab_version,
                         )
                         computed.append({
                             "level": lvl,
                             "run_id": str(run.id),
                             "status": run.status.value,
+                            "process_context": process_context,
                         })
                     except Exception as e:
                         logger.error(f"L{lvl} extraction failed: {e}")
@@ -2567,6 +2630,7 @@ def task_upgrade_extraction_level(
                 return {
                     "version_id": version_id,
                     "profile_code": profile_code,
+                    "process_context": process_context,
                     "target_level": target_level,
                     "status": "upgraded",
                     "existing_levels": list(existing_levels),

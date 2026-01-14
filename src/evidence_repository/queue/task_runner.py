@@ -137,8 +137,11 @@ def _dispatch_job(job: Job, db: Session) -> dict[str, Any]:
         task_extract_document,
         task_ingest_document,
         task_ingest_from_url,
+        task_multilevel_extract,
+        task_multilevel_extract_batch,
         task_process_document_full,
         task_process_document_version,
+        task_upgrade_extraction_level,
     )
 
     payload = job.payload or {}
@@ -210,23 +213,45 @@ def _dispatch_job(job: Job, db: Session) -> dict[str, Any]:
 
     elif job.type == JobType.PROCESS_DOCUMENT_VERSION:
         return _run_task(task_process_document_version, payload, [
-            "version_id", "project_id", "profile_code", "extraction_level",
-            "skip_extraction", "skip_spans", "skip_embeddings", "skip_facts",
-            "skip_quality", "reprocess"
+            "version_id", "project_id", "profile_code", "process_context",
+            "extraction_level", "skip_extraction", "skip_spans", "skip_embeddings",
+            "skip_facts", "skip_quality", "reprocess"
         ])
 
     elif job.type == JobType.FACT_EXTRACT:
         # Fact extraction reuses the version pipeline but only runs fact step
         return _run_task(task_process_document_version, payload, [
-            "version_id", "project_id", "profile_code", "extraction_level",
-            "skip_extraction", "skip_spans", "skip_embeddings", "skip_quality"
+            "version_id", "project_id", "profile_code", "process_context",
+            "extraction_level", "skip_extraction", "skip_spans", "skip_embeddings",
+            "skip_quality"
         ])
 
     elif job.type == JobType.QUALITY_CHECK:
         # Quality check reuses the version pipeline but only runs quality step
         return _run_task(task_process_document_version, payload, [
-            "version_id", "project_id", "skip_extraction", "skip_spans",
-            "skip_embeddings", "skip_facts"
+            "version_id", "project_id", "process_context", "skip_extraction",
+            "skip_spans", "skip_embeddings", "skip_facts"
+        ])
+
+    elif job.type == JobType.MULTILEVEL_EXTRACT:
+        # Multi-level extraction with process_context support
+        return _run_task(task_multilevel_extract, payload, [
+            "version_id", "profile_code", "process_context", "level",
+            "triggered_by", "compute_missing_levels", "schema_version", "vocab_version"
+        ])
+
+    elif job.type == JobType.MULTILEVEL_EXTRACT_BATCH:
+        # Batch multi-level extraction
+        return _run_task(task_multilevel_extract_batch, payload, [
+            "version_ids", "profile_code", "process_context", "level",
+            "triggered_by", "schema_version", "vocab_version"
+        ])
+
+    elif job.type == JobType.UPGRADE_EXTRACTION_LEVEL:
+        # Upgrade extraction to higher level
+        return _run_task(task_upgrade_extraction_level, payload, [
+            "version_id", "profile_code", "process_context", "target_level",
+            "triggered_by", "schema_version", "vocab_version"
         ])
 
     else:

@@ -618,26 +618,34 @@ from datetime import datetime
 @router.get(
     "/evidence-packs/{pack_id}/with-facts",
     summary="Get Evidence Pack with Multi-Level Facts",
-    description="Get evidence pack enriched with facts at specified profile/level.",
+    description="Get evidence pack enriched with facts at specified profile/context/level.",
 )
 async def get_evidence_pack_with_facts(
     pack_id: uuid.UUID,
     db: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
-    profile_code: str = Query("general", description="Extraction profile"),
+    profile_code: str = Query("general", description="Extraction profile (general, vc, pharma, insurance)"),
+    process_context: str = Query("unspecified", description="Business process context (e.g., vc.ic_decision, pharma.clinical_trial)"),
     level: int = Query(2, ge=1, le=4, description="Extraction level 1-4"),
 ) -> dict:
     """Get evidence pack enriched with multi-level extracted facts.
 
     This endpoint retrieves an evidence pack and enriches each item with
     relevant facts (claims, metrics, constraints, risks) extracted at the
-    specified profile and level of detail.
+    specified (profile, process_context, level) combination.
+
+    Process contexts allow domain-specific extractions:
+    - VC: vc.ic_decision, vc.due_diligence, vc.portfolio_review
+    - Pharma: pharma.clinical_trial, pharma.regulatory, pharma.safety
+    - Insurance: insurance.underwriting, insurance.claims, insurance.compliance
+    - General: general.research, general.compliance, general.audit
     """
     from evidence_repository.models.extraction_level import (
         ExtractionLevel,
         ExtractionLevelCode,
         ExtractionProfile,
         ExtractionProfileCode,
+        ProcessContext,
     )
     from evidence_repository.models.facts import (
         FactClaim,
@@ -668,11 +676,17 @@ async def get_evidence_pack_with_facts(
             detail=f"Evidence pack {pack_id} not found",
         )
 
-    # Get profile and level IDs
+    # Parse profile code
     try:
         pc = ExtractionProfileCode(profile_code)
     except ValueError:
         pc = ExtractionProfileCode.GENERAL
+
+    # Parse process context
+    try:
+        proc_ctx = ProcessContext(process_context)
+    except ValueError:
+        proc_ctx = ProcessContext.UNSPECIFIED
 
     profile_stmt = select(ExtractionProfile.id).where(ExtractionProfile.code == pc)
     profile_result = await db.execute(profile_stmt)
@@ -695,17 +709,18 @@ async def get_evidence_pack_with_facts(
     for item in pack.items:
         version_id = item.span.document_version_id
 
-        # Get facts for this version at specified profile/level
+        # Get facts for this version at specified profile/process_context/level
         fact_claims = []
         fact_metrics = []
         fact_constraints = []
         fact_risks = []
 
         if profile_id and level_id:
-            # Query facts
+            # Query facts with process_context filter
             claims_stmt = select(FactClaim).where(
                 FactClaim.version_id == version_id,
                 FactClaim.profile_id == profile_id,
+                FactClaim.process_context == proc_ctx,
                 FactClaim.level_id == level_id,
             ).limit(50)
             claims_result = await db.execute(claims_stmt)
@@ -718,11 +733,13 @@ async def get_evidence_pack_with_facts(
                     "claim_type": claim.claim_type,
                     "certainty": claim.certainty.value,
                     "evidence_quote": claim.evidence_quote,
+                    "process_context": claim.process_context.value,
                 })
 
             metrics_stmt = select(FactMetric).where(
                 FactMetric.version_id == version_id,
                 FactMetric.profile_id == profile_id,
+                FactMetric.process_context == proc_ctx,
                 FactMetric.level_id == level_id,
             ).limit(50)
             metrics_result = await db.execute(metrics_stmt)
@@ -735,11 +752,13 @@ async def get_evidence_pack_with_facts(
                     "unit": metric.unit,
                     "currency": metric.currency,
                     "certainty": metric.certainty.value,
+                    "process_context": metric.process_context.value,
                 })
 
             constraints_stmt = select(FactConstraint).where(
                 FactConstraint.version_id == version_id,
                 FactConstraint.profile_id == profile_id,
+                FactConstraint.process_context == proc_ctx,
                 FactConstraint.level_id == level_id,
             ).limit(20)
             constraints_result = await db.execute(constraints_stmt)
@@ -749,11 +768,13 @@ async def get_evidence_pack_with_facts(
                     "constraint_type": constraint.constraint_type.value,
                     "statement": constraint.statement,
                     "applies_to": constraint.applies_to,
+                    "process_context": constraint.process_context.value,
                 })
 
             risks_stmt = select(FactRisk).where(
                 FactRisk.version_id == version_id,
                 FactRisk.profile_id == profile_id,
+                FactRisk.process_context == proc_ctx,
                 FactRisk.level_id == level_id,
             ).limit(20)
             risks_result = await db.execute(risks_stmt)
@@ -764,6 +785,7 @@ async def get_evidence_pack_with_facts(
                     "severity": risk.severity.value,
                     "statement": risk.statement,
                     "rationale": risk.rationale,
+                    "process_context": risk.process_context.value,
                 })
 
         export_item = {
@@ -813,6 +835,7 @@ async def get_evidence_pack_with_facts(
         },
         "extraction_context": {
             "profile_code": profile_code,
+            "process_context": process_context,
             "level": level,
             "profile_id": str(profile_id) if profile_id else None,
             "level_id": str(level_id) if level_id else None,
@@ -820,4 +843,240 @@ async def get_evidence_pack_with_facts(
         "items": export_items,
         "item_count": len(export_items),
         "retrieved_at": datetime.utcnow().isoformat(),
+    }
+
+
+# =============================================================================
+# Evidence Pack Extraction Request (Juris API)
+# =============================================================================
+
+
+@router.post(
+    "/evidence-packs/{pack_id}/request-extraction",
+    summary="Request Extraction for Evidence Pack",
+    description="Request extraction at specific (profile, process_context, level) for all documents in an evidence pack.",
+)
+async def request_evidence_pack_extraction(
+    pack_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    profile_code: str = Query("general", description="Extraction profile"),
+    process_context: str = Query("unspecified", description="Business process context"),
+    level: int = Query(2, ge=1, le=4, description="Extraction level 1-4"),
+    compute_mode: str = Query("exact_only", description="Compute mode: exact_only or all_up_to"),
+) -> dict:
+    """Request extraction for all documents in an evidence pack.
+
+    This endpoint allows Juris or other callers to request extractions at
+    specific (profile, process_context, level) combinations for all documents
+    referenced in the evidence pack.
+
+    Compute modes:
+    - exact_only: Only compute the exact level requested
+    - all_up_to: Compute all levels from L1 up to the requested level
+
+    Returns extraction run IDs and job queue status for each document.
+    """
+    from starlette.background import BackgroundTasks
+    from evidence_repository.models.extraction_level import (
+        ExtractionProfile,
+        ExtractionProfileCode,
+        ProcessContext,
+        ExtractionRun,
+        ExtractionRunStatus,
+    )
+    from evidence_repository.queue.tasks import task_multilevel_extract
+
+    # Get the evidence pack with document references
+    result = await db.execute(
+        select(EvidencePack)
+        .options(
+            selectinload(EvidencePack.items)
+            .selectinload(EvidencePackItem.span)
+        )
+        .where(EvidencePack.id == pack_id)
+    )
+    pack = result.scalar_one_or_none()
+
+    if not pack:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evidence pack {pack_id} not found",
+        )
+
+    # Parse process context
+    try:
+        proc_ctx = ProcessContext(process_context)
+    except ValueError:
+        proc_ctx = ProcessContext.UNSPECIFIED
+
+    # Collect unique document version IDs
+    version_ids = set()
+    for item in pack.items:
+        if item.span:
+            version_ids.add(item.span.document_version_id)
+
+    # Check existing extraction runs
+    extraction_requests = []
+    for version_id in version_ids:
+        # Check if extraction already exists at this level
+        try:
+            pc = ExtractionProfileCode(profile_code)
+        except ValueError:
+            pc = ExtractionProfileCode.GENERAL
+
+        profile_stmt = select(ExtractionProfile).where(ExtractionProfile.code == pc)
+        profile_result = await db.execute(profile_stmt)
+        profile = profile_result.scalar_one_or_none()
+
+        existing_run = None
+        if profile:
+            run_stmt = select(ExtractionRun).where(
+                ExtractionRun.version_id == version_id,
+                ExtractionRun.profile_id == profile.id,
+                ExtractionRun.process_context == proc_ctx,
+                ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+            )
+            run_result = await db.execute(run_stmt)
+            existing_run = run_result.scalar_one_or_none()
+
+        if existing_run:
+            extraction_requests.append({
+                "version_id": str(version_id),
+                "status": "exists",
+                "run_id": str(existing_run.id),
+                "message": f"Extraction already exists at L{level}",
+            })
+        else:
+            # Queue new extraction
+            extraction_requests.append({
+                "version_id": str(version_id),
+                "status": "queued",
+                "profile_code": profile_code,
+                "process_context": process_context,
+                "level": level,
+                "compute_mode": compute_mode,
+            })
+
+    return {
+        "evidence_pack_id": str(pack_id),
+        "extraction_request": {
+            "profile_code": profile_code,
+            "process_context": process_context,
+            "level": level,
+            "compute_mode": compute_mode,
+        },
+        "versions_requested": len(version_ids),
+        "requests": extraction_requests,
+        "message": f"Extraction request submitted for {len(version_ids)} document versions",
+    }
+
+
+@router.get(
+    "/evidence-packs/{pack_id}/extraction-status",
+    summary="Get Extraction Status for Evidence Pack",
+    description="Check extraction status for all documents in an evidence pack.",
+)
+async def get_evidence_pack_extraction_status(
+    pack_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    profile_code: str = Query("general", description="Extraction profile"),
+    process_context: str = Query("unspecified", description="Business process context"),
+) -> dict:
+    """Get extraction status for all documents in an evidence pack.
+
+    Returns the current extraction status for each document at each level,
+    allowing Juris to determine what extractions are available and which
+    need to be requested.
+    """
+    from evidence_repository.models.extraction_level import (
+        ExtractionLevel,
+        ExtractionLevelCode,
+        ExtractionProfile,
+        ExtractionProfileCode,
+        ExtractionRun,
+        ExtractionRunStatus,
+        ProcessContext,
+    )
+
+    # Get the evidence pack with document references
+    result = await db.execute(
+        select(EvidencePack)
+        .options(
+            selectinload(EvidencePack.items)
+            .selectinload(EvidencePackItem.span)
+        )
+        .where(EvidencePack.id == pack_id)
+    )
+    pack = result.scalar_one_or_none()
+
+    if not pack:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evidence pack {pack_id} not found",
+        )
+
+    # Parse process context
+    try:
+        proc_ctx = ProcessContext(process_context)
+    except ValueError:
+        proc_ctx = ProcessContext.UNSPECIFIED
+
+    # Get profile
+    try:
+        pc = ExtractionProfileCode(profile_code)
+    except ValueError:
+        pc = ExtractionProfileCode.GENERAL
+
+    profile_stmt = select(ExtractionProfile).where(ExtractionProfile.code == pc)
+    profile_result = await db.execute(profile_stmt)
+    profile = profile_result.scalar_one_or_none()
+
+    # Get level records
+    levels_stmt = select(ExtractionLevel).order_by(ExtractionLevel.rank)
+    levels_result = await db.execute(levels_stmt)
+    levels = {level.id: level for level in levels_result.scalars()}
+
+    # Collect unique document version IDs
+    version_ids = set()
+    for item in pack.items:
+        if item.span:
+            version_ids.add(item.span.document_version_id)
+
+    # Check extraction status for each version
+    version_statuses = []
+    for version_id in version_ids:
+        level_status = {}
+
+        if profile:
+            runs_stmt = select(ExtractionRun).where(
+                ExtractionRun.version_id == version_id,
+                ExtractionRun.profile_id == profile.id,
+                ExtractionRun.process_context == proc_ctx,
+            )
+            runs_result = await db.execute(runs_stmt)
+
+            for run in runs_result.scalars():
+                level = levels.get(run.level_id)
+                if level:
+                    level_status[level.code.value] = {
+                        "status": run.status.value,
+                        "run_id": str(run.id),
+                        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                        "metadata": run.metadata_,
+                    }
+
+        version_statuses.append({
+            "version_id": str(version_id),
+            "levels": level_status,
+            "available_levels": [k for k, v in level_status.items() if v["status"] == "succeeded"],
+        })
+
+    return {
+        "evidence_pack_id": str(pack_id),
+        "profile_code": profile_code,
+        "process_context": process_context,
+        "versions_count": len(version_ids),
+        "versions": version_statuses,
     }

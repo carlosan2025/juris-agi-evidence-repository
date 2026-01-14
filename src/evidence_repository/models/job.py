@@ -47,6 +47,11 @@ class JobType(str, enum.Enum):
     METRIC_EXTRACT = "metric_extract"
     FACT_EXTRACT = "fact_extract"
 
+    # Multi-level extraction (with process_context support)
+    MULTILEVEL_EXTRACT = "multilevel_extract"
+    MULTILEVEL_EXTRACT_BATCH = "multilevel_extract_batch"
+    UPGRADE_EXTRACTION_LEVEL = "upgrade_extraction_level"
+
     # Quality analysis
     QUALITY_CHECK = "quality_check"
 
@@ -66,12 +71,12 @@ class Job(Base, UUIDMixin):
 
     # Job type and status
     type: Mapped[JobType] = mapped_column(
-        Enum(JobType),
+        Enum(JobType, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True,
     )
     status: Mapped[JobStatus] = mapped_column(
-        Enum(JobStatus),
+        Enum(JobStatus, values_callable=lambda x: [e.value for e in x]),
         default=JobStatus.QUEUED,
         nullable=False,
         index=True,

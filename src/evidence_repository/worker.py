@@ -19,7 +19,7 @@ import sys
 from datetime import datetime
 
 from redis import Redis
-from rq import Connection, Worker
+from rq import Worker
 from rq.job import Job
 
 from evidence_repository.config import get_settings

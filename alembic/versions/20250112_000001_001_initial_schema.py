@@ -23,37 +23,20 @@ def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
     op.execute("CREATE EXTENSION IF NOT EXISTS \"vector\"")
 
-    # Create extraction_status enum
-    extraction_status_enum = postgresql.ENUM(
-        "pending", "processing", "completed", "failed",
-        name="extractionstatus",
-        create_type=True,
-    )
-    extraction_status_enum.create(op.get_bind(), checkfirst=True)
-
-    # Create span_type enum
-    span_type_enum = postgresql.ENUM(
-        "text", "table", "figure", "citation", "heading", "footnote", "other",
-        name="spantype",
-        create_type=True,
-    )
-    span_type_enum.create(op.get_bind(), checkfirst=True)
-
-    # Create audit_action enum
-    audit_action_enum = postgresql.ENUM(
-        "document_upload", "document_download", "document_delete", "document_restore",
-        "version_create", "project_create", "project_update", "project_delete",
-        "document_attach", "document_detach", "version_pin", "version_unpin",
-        "extraction_start", "extraction_complete", "extraction_fail",
-        "embedding_start", "embedding_complete", "embedding_fail",
-        "span_create", "span_delete", "claim_create", "claim_delete",
-        "metric_create", "metric_delete", "evidence_pack_create",
-        "evidence_pack_update", "evidence_pack_delete", "evidence_pack_export",
-        "search_execute",
-        name="auditaction",
-        create_type=True,
-    )
-    audit_action_enum.create(op.get_bind(), checkfirst=True)
+    # Create enum types manually with raw SQL to avoid duplication issues
+    op.execute("CREATE TYPE extractionstatus AS ENUM ('pending', 'processing', 'completed', 'failed')")
+    op.execute("CREATE TYPE spantype AS ENUM ('text', 'table', 'figure', 'citation', 'heading', 'footnote', 'other')")
+    op.execute("""CREATE TYPE auditaction AS ENUM (
+        'document_upload', 'document_download', 'document_delete', 'document_restore',
+        'version_create', 'project_create', 'project_update', 'project_delete',
+        'document_attach', 'document_detach', 'version_pin', 'version_unpin',
+        'extraction_start', 'extraction_complete', 'extraction_fail',
+        'embedding_start', 'embedding_complete', 'embedding_fail',
+        'span_create', 'span_delete', 'claim_create', 'claim_delete',
+        'metric_create', 'metric_delete', 'evidence_pack_create',
+        'evidence_pack_update', 'evidence_pack_delete', 'evidence_pack_export',
+        'search_execute'
+    )""")
 
     # Create documents table
     op.create_table(
@@ -82,7 +65,7 @@ def upgrade() -> None:
         sa.Column("file_size", sa.BigInteger, nullable=False),
         sa.Column("file_hash", sa.String(64), nullable=False),
         sa.Column("extracted_text", sa.Text),
-        sa.Column("extraction_status", sa.Enum("pending", "processing", "completed", "failed", name="extractionstatus"), nullable=False, server_default="pending"),
+        sa.Column("extraction_status", postgresql.ENUM("pending", "processing", "completed", "failed", name="extractionstatus", create_type=False), nullable=False, server_default="pending"),
         sa.Column("extraction_error", sa.Text),
         sa.Column("extracted_at", sa.DateTime(timezone=True)),
         sa.Column("page_count", sa.Integer),
@@ -130,7 +113,7 @@ def upgrade() -> None:
         sa.Column("start_locator", postgresql.JSON, nullable=False),
         sa.Column("end_locator", postgresql.JSON),
         sa.Column("text_content", sa.Text, nullable=False),
-        sa.Column("span_type", sa.Enum("text", "table", "figure", "citation", "heading", "footnote", "other", name="spantype"), nullable=False, server_default="text"),
+        sa.Column("span_type", postgresql.ENUM("text", "table", "figure", "citation", "heading", "footnote", "other", name="spantype", create_type=False), nullable=False, server_default="text"),
         sa.Column("metadata", postgresql.JSON, server_default="{}"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
     )
@@ -218,7 +201,7 @@ def upgrade() -> None:
         "audit_logs",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("uuid_generate_v4()")),
         sa.Column("timestamp", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False, index=True),
-        sa.Column("action", sa.Enum(
+        sa.Column("action", postgresql.ENUM(
             "document_upload", "document_download", "document_delete", "document_restore",
             "version_create", "project_create", "project_update", "project_delete",
             "document_attach", "document_detach", "version_pin", "version_unpin",
@@ -228,7 +211,7 @@ def upgrade() -> None:
             "metric_create", "metric_delete", "evidence_pack_create",
             "evidence_pack_update", "evidence_pack_delete", "evidence_pack_export",
             "search_execute",
-            name="auditaction"
+            name="auditaction", create_type=False
         ), nullable=False, index=True),
         sa.Column("entity_type", sa.String(100), nullable=False, index=True),
         sa.Column("entity_id", postgresql.UUID(as_uuid=True), index=True),

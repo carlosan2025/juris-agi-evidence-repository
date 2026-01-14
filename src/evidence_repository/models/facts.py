@@ -29,6 +29,9 @@ if TYPE_CHECKING:
     from evidence_repository.models.extraction_level import ExtractionRun
     from evidence_repository.models.document import Document, DocumentVersion
 
+# Import ProcessContext for use in column definitions (import at runtime, not just type checking)
+from evidence_repository.models.extraction_level import ProcessContext
+
 
 # =============================================================================
 # Enums for Facts
@@ -103,11 +106,18 @@ class FactClaim(Base, UUIDMixin):
         index=True,
     )
 
-    # Extraction context (profile + level)
+    # Extraction context (profile + process_context + level)
     profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("extraction_profiles.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    process_context: Mapped[ProcessContext] = mapped_column(
+        Enum(ProcessContext),
+        default=ProcessContext.UNSPECIFIED,
+        nullable=False,
+        index=True,
+        comment="Business process context",
     )
     level_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -198,7 +208,13 @@ class FactClaim(Base, UUIDMixin):
     )
 
     __table_args__ = (
-        Index("ix_facts_claims_version_profile_level", "version_id", "profile_id", "level_id"),
+        Index(
+            "ix_facts_claims_version_profile_context_level",
+            "version_id",
+            "profile_id",
+            "process_context",
+            "level_id",
+        ),
         Index("ix_facts_claims_predicate", "predicate"),
         Index("ix_facts_claims_claim_type", "claim_type"),
     )
@@ -232,11 +248,18 @@ class FactMetric(Base, UUIDMixin):
         index=True,
     )
 
-    # Extraction context
+    # Extraction context (profile + process_context + level)
     profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("extraction_profiles.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    process_context: Mapped[ProcessContext] = mapped_column(
+        Enum(ProcessContext),
+        default=ProcessContext.UNSPECIFIED,
+        nullable=False,
+        index=True,
+        comment="Business process context",
     )
     level_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -355,7 +378,13 @@ class FactMetric(Base, UUIDMixin):
     )
 
     __table_args__ = (
-        Index("ix_facts_metrics_version_profile_level", "version_id", "profile_id", "level_id"),
+        Index(
+            "ix_facts_metrics_version_profile_context_level",
+            "version_id",
+            "profile_id",
+            "process_context",
+            "level_id",
+        ),
         Index("ix_facts_metrics_metric_name", "metric_name"),
         Index("ix_facts_metrics_entity", "entity_id", "metric_name"),
     )
@@ -389,11 +418,18 @@ class FactConstraint(Base, UUIDMixin):
         index=True,
     )
 
-    # Extraction context
+    # Extraction context (profile + process_context + level)
     profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("extraction_profiles.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    process_context: Mapped[ProcessContext] = mapped_column(
+        Enum(ProcessContext),
+        default=ProcessContext.UNSPECIFIED,
+        nullable=False,
+        index=True,
+        comment="Business process context",
     )
     level_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -461,7 +497,13 @@ class FactConstraint(Base, UUIDMixin):
     )
 
     __table_args__ = (
-        Index("ix_facts_constraints_version_profile_level", "version_id", "profile_id", "level_id"),
+        Index(
+            "ix_facts_constraints_version_profile_context_level",
+            "version_id",
+            "profile_id",
+            "process_context",
+            "level_id",
+        ),
         Index("ix_facts_constraints_type", "constraint_type"),
     )
 
@@ -494,11 +536,18 @@ class FactRisk(Base, UUIDMixin):
         index=True,
     )
 
-    # Extraction context
+    # Extraction context (profile + process_context + level)
     profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("extraction_profiles.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    process_context: Mapped[ProcessContext] = mapped_column(
+        Enum(ProcessContext),
+        default=ProcessContext.UNSPECIFIED,
+        nullable=False,
+        index=True,
+        comment="Business process context",
     )
     level_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -579,6 +628,12 @@ class FactRisk(Base, UUIDMixin):
     )
 
     __table_args__ = (
-        Index("ix_facts_risks_version_profile_level", "version_id", "profile_id", "level_id"),
+        Index(
+            "ix_facts_risks_version_profile_context_level",
+            "version_id",
+            "profile_id",
+            "process_context",
+            "level_id",
+        ),
         Index("ix_facts_risks_type_severity", "risk_type", "severity"),
     )

@@ -90,3 +90,6 @@ Thumbs.db
 
 # Alembic
 alembic/versions/*.pyc
+.vercel
+.env*.local
+.env.vercel

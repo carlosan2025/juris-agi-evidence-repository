@@ -10,11 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from evidence_repository.config import settings
+from evidence_repository.config import get_settings
 from evidence_repository.extraction.multilevel.prompts import (
     build_system_prompt,
     build_user_prompt,
 )
+
+# Get settings instance
+settings = get_settings()
 from evidence_repository.extraction.multilevel.schemas import (
     ExtractedFactClaim,
     ExtractedFactConstraint,
@@ -33,6 +36,7 @@ from evidence_repository.models.extraction_level import (
     ExtractionProfileCode,
     ExtractionRun,
     ExtractionRunStatus,
+    ProcessContext,
 )
 from evidence_repository.models.facts import (
     ConstraintType,
@@ -84,16 +88,22 @@ class MultiLevelExtractionService:
         version_id: uuid.UUID,
         profile_code: str,
         level: int,
+        process_context: str = "unspecified",
         triggered_by: str | None = None,
+        schema_version: str = "1.0",
+        vocab_version: str = "1.0",
     ) -> ExtractionRun:
-        """Run extraction for a document version at specified profile/level.
+        """Run extraction for a document version at specified profile/context/level.
 
         Args:
             session: Database session
             version_id: Document version ID
             profile_code: Extraction profile code (vc, pharma, insurance, general)
             level: Extraction level (1-4)
+            process_context: Business process context (e.g., vc.ic_decision)
             triggered_by: User who triggered extraction
+            schema_version: Schema version for output
+            vocab_version: Vocabulary version used
 
         Returns:
             ExtractionRun record
@@ -107,18 +117,24 @@ class MultiLevelExtractionService:
         if not version:
             raise ValueError(f"Document version {version_id} not found")
 
+        # Parse process context
+        try:
+            process_ctx = ProcessContext(process_context)
+        except ValueError:
+            process_ctx = ProcessContext.UNSPECIFIED
+
         # Get profile and level records
         profile = await self._get_or_create_profile(session, profile_code)
         level_record = await self._get_or_create_level(session, level)
 
-        # Check for existing active run
+        # Check for existing active run (now includes process_context)
         existing_run = await self._get_active_run(
-            session, version_id, profile.id, level_record.id
+            session, version_id, profile.id, process_ctx, level_record.id
         )
         if existing_run:
             logger.info(
                 f"Active extraction run already exists for version={version_id}, "
-                f"profile={profile_code}, level={level}"
+                f"profile={profile_code}, process_context={process_context}, level={level}"
             )
             return existing_run
 
@@ -127,10 +143,13 @@ class MultiLevelExtractionService:
             document_id=version.document_id,
             version_id=version_id,
             profile_id=profile.id,
+            process_context=process_ctx,
             level_id=level_record.id,
             status=ExtractionRunStatus.RUNNING,
             started_at=datetime.utcnow(),
             triggered_by=triggered_by,
+            schema_version=schema_version,
+            vocab_version=vocab_version,
         )
         session.add(run)
         await session.flush()
@@ -255,12 +274,14 @@ class MultiLevelExtractionService:
         session: AsyncSession,
         version_id: uuid.UUID,
         profile_id: uuid.UUID,
+        process_context: ProcessContext,
         level_id: uuid.UUID,
     ) -> ExtractionRun | None:
         """Check for existing active extraction run."""
         stmt = select(ExtractionRun).where(
             ExtractionRun.version_id == version_id,
             ExtractionRun.profile_id == profile_id,
+            ExtractionRun.process_context == process_context,
             ExtractionRun.level_id == level_id,
             ExtractionRun.status.in_([
                 ExtractionRunStatus.QUEUED,
@@ -374,6 +395,7 @@ class MultiLevelExtractionService:
                 document_id=run.document_id,
                 version_id=run.version_id,
                 profile_id=run.profile_id,
+                process_context=run.process_context,
                 level_id=run.level_id,
                 extraction_run_id=run.id,
                 subject=claim.subject,
@@ -395,6 +417,7 @@ class MultiLevelExtractionService:
                 document_id=run.document_id,
                 version_id=run.version_id,
                 profile_id=run.profile_id,
+                process_context=run.process_context,
                 level_id=run.level_id,
                 extraction_run_id=run.id,
                 entity_id=metric.entity_id,
@@ -425,6 +448,7 @@ class MultiLevelExtractionService:
                 document_id=run.document_id,
                 version_id=run.version_id,
                 profile_id=run.profile_id,
+                process_context=run.process_context,
                 level_id=run.level_id,
                 extraction_run_id=run.id,
                 constraint_type=self._map_constraint_type(constraint.constraint_type),
@@ -442,6 +466,7 @@ class MultiLevelExtractionService:
                 document_id=run.document_id,
                 version_id=run.version_id,
                 profile_id=run.profile_id,
+                process_context=run.process_context,
                 level_id=run.level_id,
                 extraction_run_id=run.id,
                 risk_type=risk.risk_type,
@@ -462,6 +487,7 @@ class MultiLevelExtractionService:
                 document_id=run.document_id,
                 version_id=run.version_id,
                 profile_id=run.profile_id,
+                process_context=run.process_context,
                 level_id=run.level_id,
                 extraction_run_id=run.id,
                 topic=conflict.topic,
@@ -478,6 +504,7 @@ class MultiLevelExtractionService:
                 document_id=run.document_id,
                 version_id=run.version_id,
                 profile_id=run.profile_id,
+                process_context=run.process_context,
                 level_id=run.level_id,
                 extraction_run_id=run.id,
                 question=question.question,

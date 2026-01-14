@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from evidence_repository.models.document import Document, DocumentVersion
     from evidence_repository.models.extraction_level import ExtractionRun
 
+# Import ProcessContext for use in column definitions
+from evidence_repository.models.extraction_level import ProcessContext
+
 
 # =============================================================================
 # Enums for Quality
@@ -78,11 +81,18 @@ class QualityConflict(Base, UUIDMixin):
         index=True,
     )
 
-    # Extraction context
+    # Extraction context (profile + process_context + level)
     profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("extraction_profiles.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    process_context: Mapped[ProcessContext] = mapped_column(
+        Enum(ProcessContext),
+        default=ProcessContext.UNSPECIFIED,
+        nullable=False,
+        index=True,
+        comment="Business process context",
     )
     level_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -152,7 +162,13 @@ class QualityConflict(Base, UUIDMixin):
     )
 
     __table_args__ = (
-        Index("ix_quality_conflicts_version_profile_level", "version_id", "profile_id", "level_id"),
+        Index(
+            "ix_quality_conflicts_version_profile_context_level",
+            "version_id",
+            "profile_id",
+            "process_context",
+            "level_id",
+        ),
         Index("ix_quality_conflicts_severity", "severity"),
     )
 
@@ -185,11 +201,18 @@ class QualityOpenQuestion(Base, UUIDMixin):
         index=True,
     )
 
-    # Extraction context
+    # Extraction context (profile + process_context + level)
     profile_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("extraction_profiles.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    process_context: Mapped[ProcessContext] = mapped_column(
+        Enum(ProcessContext),
+        default=ProcessContext.UNSPECIFIED,
+        nullable=False,
+        index=True,
+        comment="Business process context",
     )
     level_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -255,6 +278,12 @@ class QualityOpenQuestion(Base, UUIDMixin):
     )
 
     __table_args__ = (
-        Index("ix_quality_open_questions_version_profile_level", "version_id", "profile_id", "level_id"),
+        Index(
+            "ix_quality_open_questions_version_profile_context_level",
+            "version_id",
+            "profile_id",
+            "process_context",
+            "level_id",
+        ),
         Index("ix_quality_open_questions_category", "category"),
     )

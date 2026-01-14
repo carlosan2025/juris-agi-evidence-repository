@@ -78,7 +78,7 @@ class AuditLog(Base, UUIDMixin):
 
     # What
     action: Mapped[AuditAction] = mapped_column(
-        Enum(AuditAction),
+        Enum(AuditAction, values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         index=True,
     )

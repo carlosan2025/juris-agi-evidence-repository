@@ -33,9 +33,10 @@ from evidence_repository.models.extraction_level import (
     ExtractionLevelCode,
     ExtractionProfile,
     ExtractionProfileCode,
+    ExtractionRun as MultiLevelExtractionRun,  # Alias for backward compatibility
     ExtractionRunStatus as MultiLevelExtractionRunStatus,
-    ExtractionRun as MultiLevelExtractionRun,
     ExtractionSetting,
+    ProcessContext,
     ScopeType,
 )
 from evidence_repository.models.facts import (
@@ -55,6 +56,7 @@ from evidence_repository.models.ingestion import (
     IngestionItemStatus,
     IngestionSource,
 )
+from evidence_repository.models.integration_key import IntegrationKey, IntegrationProvider
 from evidence_repository.models.job import Job, JobStatus, JobType
 from evidence_repository.models.project import Project, ProjectDocument
 from evidence_repository.models.quality import (
@@ -120,6 +122,7 @@ __all__ = [
     "MultiLevelExtractionRun",
     "MultiLevelExtractionRunStatus",
     "ComputeMode",
+    "ProcessContext",
     "ScopeType",
     # Facts
     "FactClaim",
@@ -138,4 +141,7 @@ __all__ = [
     # Audit
     "AuditLog",
     "AuditAction",
+    # Integration Keys
+    "IntegrationKey",
+    "IntegrationProvider",
 ]

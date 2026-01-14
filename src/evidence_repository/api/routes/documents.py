@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -78,6 +78,10 @@ No processing happens synchronously - use GET /jobs/{job_id} to track progress.
 async def upload_document(
     request: Request,
     file: UploadFile = File(..., description="Document file to upload"),
+    profile_code: str = Form(
+        default="general",
+        description="Industry profile for extraction: vc, pharma, insurance, or general",
+    ),
     db: AsyncSession = Depends(get_db_session),
     storage: StorageBackend = Depends(get_storage),
     user: User = Depends(get_current_user),
@@ -116,6 +120,14 @@ async def upload_document(
             detail=f"File too large ({len(content)} bytes). Maximum: {max_size} bytes",
         )
 
+    # Validate profile_code
+    valid_profiles = {"general", "vc", "pharma", "insurance"}
+    if profile_code not in valid_profiles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid profile_code: {profile_code}. Valid options: {', '.join(sorted(valid_profiles))}",
+        )
+
     # Store file and create document/version records
     ingestion = IngestionService(storage=storage, db=db)
     document, version = await ingestion.ingest_document(
@@ -123,6 +135,7 @@ async def upload_document(
         content_type=file.content_type or "application/octet-stream",
         data=content,
         metadata={"uploaded_by": user.id},
+        profile_code=profile_code,
     )
 
     # Write audit log for upload
@@ -144,14 +157,14 @@ async def upload_document(
 
     await db.commit()
 
-    # Enqueue processing job
+    # Enqueue processing job (use PROCESS_DOCUMENT_VERSION for the idempotent 5-step pipeline)
     job_queue = get_job_queue()
     job_id = job_queue.enqueue(
-        job_type=JobType.DOCUMENT_PROCESS_FULL,
+        job_type=JobType.PROCESS_DOCUMENT_VERSION,
         payload={
-            "document_id": str(document.id),
             "version_id": str(version.id),
-            "user_id": user.id,
+            "profile_code": profile_code,
+            "extraction_level": 2,  # Standard level by default
         },
         priority=0,
     )
@@ -160,7 +173,7 @@ async def upload_document(
         document_id=document.id,
         version_id=version.id,
         job_id=job_id,
-        message=f"Document '{file.filename}' stored and queued for processing",
+        message=f"Document '{file.filename}' stored and queued for processing (profile: {profile_code})",
     )
 
 
@@ -332,14 +345,14 @@ async def upload_document_version(
 
     await db.commit()
 
-    # Enqueue processing job
+    # Enqueue processing job (use PROCESS_DOCUMENT_VERSION for the idempotent 5-step pipeline)
     job_queue = get_job_queue()
     job_id = job_queue.enqueue(
-        job_type=JobType.DOCUMENT_PROCESS_FULL,
+        job_type=JobType.PROCESS_DOCUMENT_VERSION,
         payload={
-            "document_id": str(document.id),
             "version_id": str(version.id),
-            "user_id": user.id,
+            "profile_code": document.profile_code,  # Use document's profile
+            "extraction_level": 2,
         },
         priority=0,
     )
@@ -349,7 +362,7 @@ async def upload_document_version(
         version_id=version.id,
         version_number=version.version_number,
         job_id=job_id,
-        message=f"Version {version.version_number} stored and queued for processing",
+        message=f"Version {version.version_number} stored and queued for processing (profile: {document.profile_code})",
     )
 
 
@@ -603,16 +616,24 @@ async def trigger_extraction(
     "/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete Document",
-    description="Soft delete a document.",
+    description="Permanently delete a document, cancel pending jobs, and remove files from storage.",
 )
 async def delete_document(
     document_id: uuid.UUID,
+    request: Request,
     db: AsyncSession = Depends(get_db_session),
     storage: StorageBackend = Depends(get_storage),
     user: User = Depends(get_current_user),
 ) -> None:
-    """Soft delete a document."""
-    result = await db.execute(select(Document).where(Document.id == document_id))
+    """Permanently delete a document, cancel any pending jobs, and remove files from storage."""
+    import logging
+    from evidence_repository.models.job import Job, JobStatus
+
+    result = await db.execute(
+        select(Document)
+        .options(selectinload(Document.versions))
+        .where(Document.id == document_id)
+    )
     document = result.scalar_one_or_none()
 
     if not document:
@@ -621,8 +642,55 @@ async def delete_document(
             detail=f"Document {document_id} not found",
         )
 
-    ingestion = IngestionService(storage=storage, db=db)
-    await ingestion.soft_delete_document(document)
+    # Get version IDs for this document
+    version_ids = [str(v.id) for v in document.versions]
+    canceled_jobs = 0
+
+    # Cancel any pending/running jobs for this document's versions
+    if version_ids:
+        # Find jobs that reference these versions in their payload
+        jobs_result = await db.execute(
+            select(Job).where(
+                Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING])
+            )
+        )
+        jobs = jobs_result.scalars().all()
+
+        for job in jobs:
+            # Check if job payload contains any of our version IDs
+            payload_version_id = job.payload.get("version_id")
+            payload_document_id = job.payload.get("document_id")
+            if payload_version_id in version_ids or payload_document_id == str(document_id):
+                job.status = JobStatus.CANCELED
+                job.error = f"Document {document_id} was deleted"
+                canceled_jobs += 1
+                logging.info(f"Canceled job {job.id} for deleted document {document_id}")
+
+    # Delete files from storage for each version
+    for version in document.versions:
+        try:
+            await storage.delete(version.storage_path)
+        except Exception as e:
+            # Log but continue - file might already be deleted
+            logging.warning(f"Failed to delete file {version.storage_path}: {e}")
+
+    # Write audit log for deletion
+    await _write_audit_log(
+        db=db,
+        action=AuditAction.DOCUMENT_DELETE,
+        entity_type="document",
+        entity_id=document_id,
+        actor_id=user.id,
+        details={
+            "filename": document.filename,
+            "version_count": len(document.versions),
+            "canceled_jobs": canceled_jobs,
+        },
+        request=request,
+    )
+
+    # Hard delete from database (cascades to versions, spans, etc.)
+    await db.delete(document)
     await db.commit()
 
 

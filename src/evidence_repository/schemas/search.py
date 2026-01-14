@@ -16,6 +16,8 @@ class SearchMode(str, Enum):
     SEMANTIC = "semantic"  # Vector similarity search only
     KEYWORD = "keyword"  # Full-text keyword search only
     HYBRID = "hybrid"  # Combined semantic + keyword search
+    TWO_STAGE = "two_stage"  # Metadata filter + semantic ranking (Agent-K)
+    DISCOVERY = "discovery"  # Find comprehensive document coverage (Agent-K)
 
 
 class SpanTypeFilter(str, Enum):
@@ -59,7 +61,7 @@ class SearchQuery(BaseModel):
     # Search mode
     mode: SearchMode = Field(
         default=SearchMode.SEMANTIC,
-        description="Search mode: semantic (vector), keyword (text), or hybrid",
+        description="Search mode: semantic, keyword, hybrid, two_stage, or discovery",
     )
     # Span filtering
     span_types: list[SpanTypeFilter] | None = Field(
@@ -69,6 +71,42 @@ class SearchQuery(BaseModel):
     spans_only: bool = Field(
         default=False,
         description="Only return results that have associated spans",
+    )
+
+    # Agent-K two-stage search filters
+    sectors: list[str] | None = Field(
+        default=None,
+        description="Filter by industry sectors (for two_stage/discovery modes)",
+    )
+    topics: list[str] | None = Field(
+        default=None,
+        description="Filter by main topics (for two_stage/discovery modes)",
+    )
+    document_types: list[str] | None = Field(
+        default=None,
+        description="Filter by document types (for two_stage/discovery modes)",
+    )
+    geographies: list[str] | None = Field(
+        default=None,
+        description="Filter by geographic regions (for two_stage/discovery modes)",
+    )
+    companies: list[str] | None = Field(
+        default=None,
+        description="Filter by company names (for two_stage/discovery modes)",
+    )
+
+    # Two-stage search weights
+    metadata_weight: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Weight for metadata score in two_stage mode",
+    )
+    semantic_weight: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="Weight for semantic score in two_stage mode",
     )
 
 

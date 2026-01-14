@@ -19,102 +19,23 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # ==========================================================================
-    # Create enums for new tables
+    # Create enums for new tables using raw SQL
     # ==========================================================================
-
-    # Job status enum
-    job_status_enum = postgresql.ENUM(
-        "queued", "running", "succeeded", "failed", "canceled", "retrying",
-        name="jobstatus",
-        create_type=True,
-    )
-    job_status_enum.create(op.get_bind(), checkfirst=True)
-
-    # Job type enum
-    job_type_enum = postgresql.ENUM(
-        "document_ingest", "document_extract", "document_embed", "document_process_full",
-        "bulk_folder_ingest", "bulk_url_ingest", "batch_extract", "batch_embed",
-        "span_extract", "claim_extract", "metric_extract",
-        "cleanup", "reindex",
-        name="jobtype",
-        create_type=True,
-    )
-    job_type_enum.create(op.get_bind(), checkfirst=True)
-
-    # Ingestion batch status enum
-    ingestion_batch_status_enum = postgresql.ENUM(
-        "pending", "processing", "completed", "partial", "failed", "canceled",
-        name="ingestionbatchstatus",
-        create_type=True,
-    )
-    ingestion_batch_status_enum.create(op.get_bind(), checkfirst=True)
-
-    # Ingestion item status enum
-    ingestion_item_status_enum = postgresql.ENUM(
-        "pending", "downloading", "processing", "extracting", "embedding",
-        "completed", "failed", "skipped",
-        name="ingestionitemstatus",
-        create_type=True,
-    )
-    ingestion_item_status_enum.create(op.get_bind(), checkfirst=True)
-
-    # Ingestion source enum
-    ingestion_source_enum = postgresql.ENUM(
-        "file_upload", "local_folder", "url", "s3_bucket", "api_import",
-        name="ingestionsource",
-        create_type=True,
-    )
-    ingestion_source_enum.create(op.get_bind(), checkfirst=True)
-
-    # Conflict type enum
-    conflict_type_enum = postgresql.ENUM(
-        "contradiction", "inconsistency", "metric_mismatch", "temporal",
-        "numeric", "factual", "other",
-        name="conflicttype",
-        create_type=True,
-    )
-    conflict_type_enum.create(op.get_bind(), checkfirst=True)
-
-    # Conflict status enum
-    conflict_status_enum = postgresql.ENUM(
-        "open", "under_review", "resolved", "dismissed", "escalated",
-        name="conflictstatus",
-        create_type=True,
-    )
-    conflict_status_enum.create(op.get_bind(), checkfirst=True)
-
-    # Conflict severity enum
-    conflict_severity_enum = postgresql.ENUM(
-        "low", "medium", "high", "critical",
-        name="conflictseverity",
-        create_type=True,
-    )
-    conflict_severity_enum.create(op.get_bind(), checkfirst=True)
-
-    # Question priority enum
-    question_priority_enum = postgresql.ENUM(
-        "low", "medium", "high", "urgent",
-        name="questionpriority",
-        create_type=True,
-    )
-    question_priority_enum.create(op.get_bind(), checkfirst=True)
-
-    # Question status enum
-    question_status_enum = postgresql.ENUM(
-        "open", "in_progress", "answered", "deferred", "closed",
-        name="questionstatus",
-        create_type=True,
-    )
-    question_status_enum.create(op.get_bind(), checkfirst=True)
-
-    # Question category enum
-    question_category_enum = postgresql.ENUM(
-        "missing_evidence", "clarification", "verification", "ambiguity",
-        "follow_up", "methodology", "other",
-        name="questioncategory",
-        create_type=True,
-    )
-    question_category_enum.create(op.get_bind(), checkfirst=True)
+    op.execute("CREATE TYPE jobstatus AS ENUM ('queued', 'running', 'succeeded', 'failed', 'canceled', 'retrying')")
+    op.execute("""CREATE TYPE jobtype AS ENUM (
+        'document_ingest', 'document_extract', 'document_embed', 'document_process_full',
+        'bulk_folder_ingest', 'bulk_url_ingest', 'batch_extract', 'batch_embed',
+        'span_extract', 'claim_extract', 'metric_extract', 'cleanup', 'reindex'
+    )""")
+    op.execute("CREATE TYPE ingestionbatchstatus AS ENUM ('pending', 'processing', 'completed', 'partial', 'failed', 'canceled')")
+    op.execute("CREATE TYPE ingestionitemstatus AS ENUM ('pending', 'downloading', 'processing', 'extracting', 'embedding', 'completed', 'failed', 'skipped')")
+    op.execute("CREATE TYPE ingestionsource AS ENUM ('file_upload', 'local_folder', 'url', 's3_bucket', 'api_import')")
+    op.execute("CREATE TYPE conflicttype AS ENUM ('contradiction', 'inconsistency', 'metric_mismatch', 'temporal', 'numeric', 'factual', 'other')")
+    op.execute("CREATE TYPE conflictstatus AS ENUM ('open', 'under_review', 'resolved', 'dismissed', 'escalated')")
+    op.execute("CREATE TYPE conflictseverity AS ENUM ('low', 'medium', 'high', 'critical')")
+    op.execute("CREATE TYPE questionpriority AS ENUM ('low', 'medium', 'high', 'urgent')")
+    op.execute("CREATE TYPE questionstatus AS ENUM ('open', 'in_progress', 'answered', 'deferred', 'closed')")
+    op.execute("CREATE TYPE questioncategory AS ENUM ('missing_evidence', 'clarification', 'verification', 'ambiguity', 'follow_up', 'methodology', 'other')")
 
     # ==========================================================================
     # Create jobs table
@@ -123,16 +44,16 @@ def upgrade() -> None:
         "jobs",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True,
                   server_default=sa.text("uuid_generate_v4()")),
-        sa.Column("type", sa.Enum(
+        sa.Column("type", postgresql.ENUM(
             "document_ingest", "document_extract", "document_embed", "document_process_full",
             "bulk_folder_ingest", "bulk_url_ingest", "batch_extract", "batch_embed",
             "span_extract", "claim_extract", "metric_extract",
             "cleanup", "reindex",
-            name="jobtype"
+            name="jobtype", create_type=False
         ), nullable=False),
-        sa.Column("status", sa.Enum(
+        sa.Column("status", postgresql.ENUM(
             "queued", "running", "succeeded", "failed", "canceled", "retrying",
-            name="jobstatus"
+            name="jobstatus", create_type=False
         ), nullable=False, server_default="queued"),
         sa.Column("priority", sa.Integer, nullable=False, server_default="0"),
         sa.Column("payload", postgresql.JSON, nullable=False, server_default="{}"),
@@ -165,14 +86,14 @@ def upgrade() -> None:
                   server_default=sa.text("uuid_generate_v4()")),
         sa.Column("name", sa.String(255)),
         sa.Column("description", sa.Text),
-        sa.Column("source_type", sa.Enum(
+        sa.Column("source_type", postgresql.ENUM(
             "file_upload", "local_folder", "url", "s3_bucket", "api_import",
-            name="ingestionsource"
+            name="ingestionsource", create_type=False
         ), nullable=False),
         sa.Column("source_path", sa.Text),
-        sa.Column("status", sa.Enum(
+        sa.Column("status", postgresql.ENUM(
             "pending", "processing", "completed", "partial", "failed", "canceled",
-            name="ingestionbatchstatus"
+            name="ingestionbatchstatus", create_type=False
         ), nullable=False, server_default="pending"),
         sa.Column("total_items", sa.Integer, nullable=False, server_default="0"),
         sa.Column("processed_items", sa.Integer, nullable=False, server_default="0"),
@@ -209,10 +130,10 @@ def upgrade() -> None:
         sa.Column("source_path", sa.Text, nullable=False),
         sa.Column("source_filename", sa.String(500), nullable=False),
         sa.Column("source_size", sa.Integer),
-        sa.Column("status", sa.Enum(
+        sa.Column("status", postgresql.ENUM(
             "pending", "downloading", "processing", "extracting", "embedding",
             "completed", "failed", "skipped",
-            name="ingestionitemstatus"
+            name="ingestionitemstatus", create_type=False
         ), nullable=False, server_default="pending"),
         sa.Column("document_id", postgresql.UUID(as_uuid=True),
                   sa.ForeignKey("documents.id", ondelete="SET NULL")),
@@ -246,18 +167,18 @@ def upgrade() -> None:
         sa.Column("project_id", postgresql.UUID(as_uuid=True),
                   sa.ForeignKey("projects.id", ondelete="CASCADE"),
                   nullable=False),
-        sa.Column("conflict_type", sa.Enum(
+        sa.Column("conflict_type", postgresql.ENUM(
             "contradiction", "inconsistency", "metric_mismatch", "temporal",
             "numeric", "factual", "other",
-            name="conflicttype"
+            name="conflicttype", create_type=False
         ), nullable=False, server_default="other"),
-        sa.Column("severity", sa.Enum(
+        sa.Column("severity", postgresql.ENUM(
             "low", "medium", "high", "critical",
-            name="conflictseverity"
+            name="conflictseverity", create_type=False
         ), nullable=False, server_default="medium"),
-        sa.Column("status", sa.Enum(
+        sa.Column("status", postgresql.ENUM(
             "open", "under_review", "resolved", "dismissed", "escalated",
-            name="conflictstatus"
+            name="conflictstatus", create_type=False
         ), nullable=False, server_default="open"),
         sa.Column("title", sa.String(500), nullable=False),
         sa.Column("description", sa.Text, nullable=False),
@@ -314,18 +235,18 @@ def upgrade() -> None:
                   nullable=False),
         sa.Column("question", sa.Text, nullable=False),
         sa.Column("context", sa.Text),
-        sa.Column("category", sa.Enum(
+        sa.Column("category", postgresql.ENUM(
             "missing_evidence", "clarification", "verification", "ambiguity",
             "follow_up", "methodology", "other",
-            name="questioncategory"
+            name="questioncategory", create_type=False
         ), nullable=False, server_default="other"),
-        sa.Column("priority", sa.Enum(
+        sa.Column("priority", postgresql.ENUM(
             "low", "medium", "high", "urgent",
-            name="questionpriority"
+            name="questionpriority", create_type=False
         ), nullable=False, server_default="medium"),
-        sa.Column("status", sa.Enum(
+        sa.Column("status", postgresql.ENUM(
             "open", "in_progress", "answered", "deferred", "closed",
-            name="questionstatus"
+            name="questionstatus", create_type=False
         ), nullable=False, server_default="open"),
         # Related evidence
         sa.Column("span_id", postgresql.UUID(as_uuid=True),

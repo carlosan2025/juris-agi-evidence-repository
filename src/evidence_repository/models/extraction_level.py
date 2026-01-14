@@ -76,6 +76,39 @@ class ScopeType(str, enum.Enum):
     DOCUMENT_VERSION = "document_version"
 
 
+class ProcessContext(str, enum.Enum):
+    """Process context for extraction runs.
+
+    Defines the business process context that determines what
+    facts are relevant and how they should be extracted.
+    """
+
+    # Unspecified (backward compatibility)
+    UNSPECIFIED = "unspecified"
+
+    # Venture Capital contexts
+    VC_IC_DECISION = "vc.ic_decision"  # Investment committee decision
+    VC_DUE_DILIGENCE = "vc.due_diligence"  # Due diligence process
+    VC_PORTFOLIO_REVIEW = "vc.portfolio_review"  # Portfolio company review
+    VC_MARKET_ANALYSIS = "vc.market_analysis"  # Market/competitive analysis
+
+    # Pharmaceutical contexts
+    PHARMA_CLINICAL_TRIAL = "pharma.clinical_trial"  # Clinical trial analysis
+    PHARMA_REGULATORY = "pharma.regulatory"  # Regulatory submission
+    PHARMA_SAFETY = "pharma.safety"  # Safety/adverse event analysis
+    PHARMA_MARKET_ACCESS = "pharma.market_access"  # Market access/pricing
+
+    # Insurance contexts
+    INSURANCE_UNDERWRITING = "insurance.underwriting"  # Risk underwriting
+    INSURANCE_CLAIMS = "insurance.claims"  # Claims processing
+    INSURANCE_COMPLIANCE = "insurance.compliance"  # Regulatory compliance
+
+    # General contexts
+    GENERAL_RESEARCH = "general.research"  # General research
+    GENERAL_COMPLIANCE = "general.compliance"  # Compliance review
+    GENERAL_AUDIT = "general.audit"  # Audit support
+
+
 # =============================================================================
 # Extraction Profile Model
 # =============================================================================
@@ -254,13 +287,15 @@ class ExtractionSetting(Base, UUIDMixin, TimestampMixin):
 
 
 class ExtractionRun(Base, UUIDMixin):
-    """Record of an extraction run for a specific (version, profile, level).
+    """Record of an extraction run for a specific (version, profile, process_context, level).
 
     Tracks the status and results of fact extraction jobs, ensuring
-    idempotency and preventing duplicate extractions.
+    idempotency and preventing duplicate extractions. This is separate from
+    the document text extraction runs (extraction.py) which extract text
+    from documents.
     """
 
-    __tablename__ = "extraction_runs"
+    __tablename__ = "fact_extraction_runs"
 
     # Document reference
     document_id: Mapped[uuid.UUID] = mapped_column(
@@ -286,6 +321,29 @@ class ExtractionRun(Base, UUIDMixin):
         UUID(as_uuid=True),
         ForeignKey("extraction_levels.id", ondelete="CASCADE"),
         nullable=False,
+    )
+
+    # Process context (business process that triggered extraction)
+    process_context: Mapped[ProcessContext] = mapped_column(
+        Enum(ProcessContext),
+        default=ProcessContext.UNSPECIFIED,
+        nullable=False,
+        index=True,
+        comment="Business process context for this extraction",
+    )
+
+    # Schema and vocabulary versioning for reproducibility
+    schema_version: Mapped[str] = mapped_column(
+        String(50),
+        default="1.0",
+        nullable=False,
+        comment="Schema version used for this extraction",
+    )
+    vocab_version: Mapped[str] = mapped_column(
+        String(50),
+        default="1.0",
+        nullable=False,
+        comment="Vocabulary version used for this extraction",
     )
 
     # Status
@@ -372,17 +430,25 @@ class ExtractionRun(Base, UUIDMixin):
     )
 
     __table_args__ = (
-        # Prevent duplicate active runs for same (version, profile, level)
+        # Prevent duplicate active runs for same (version, profile, process_context, level)
         Index(
-            "ix_extraction_runs_active",
+            "ix_fact_extraction_runs_active",
             "version_id",
             "profile_id",
+            "process_context",
             "level_id",
             unique=True,
             postgresql_where=(status.in_([ExtractionRunStatus.QUEUED, ExtractionRunStatus.RUNNING])),
         ),
-        Index("ix_extraction_runs_version_profile_level", "version_id", "profile_id", "level_id"),
-        Index("ix_extraction_runs_status", "status"),
+        Index(
+            "ix_fact_extraction_runs_version_profile_context_level",
+            "version_id",
+            "profile_id",
+            "process_context",
+            "level_id",
+        ),
+        Index("ix_fact_extraction_runs_status", "status"),
+        Index("ix_fact_extraction_runs_process_context", "process_context"),
     )
 
 

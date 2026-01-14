@@ -64,6 +64,10 @@ class JobQueue:
         JobType.PROCESS_DOCUMENT_VERSION: "evidence_repository.queue.tasks.task_process_document_version",
         JobType.FACT_EXTRACT: "evidence_repository.queue.tasks.task_process_document_version",
         JobType.QUALITY_CHECK: "evidence_repository.queue.tasks.task_process_document_version",
+        # Multi-level extraction (with process_context support)
+        JobType.MULTILEVEL_EXTRACT: "evidence_repository.queue.tasks.task_multilevel_extract",
+        JobType.MULTILEVEL_EXTRACT_BATCH: "evidence_repository.queue.tasks.task_multilevel_extract_batch",
+        JobType.UPGRADE_EXTRACTION_LEVEL: "evidence_repository.queue.tasks.task_upgrade_extraction_level",
     }
 
     def __init__(
@@ -83,9 +87,11 @@ class JobQueue:
         if db_session_factory:
             self._session_factory = db_session_factory
         else:
-            # Create sync engine for database access
-            sync_url = self.settings.database_url.replace("+asyncpg", "")
-            engine = create_engine(sync_url)
+            # Create sync engine for database access using psycopg2
+            sync_url = self.settings.database_url.replace(
+                "postgresql+asyncpg://", "postgresql+psycopg2://"
+            )
+            engine = create_engine(sync_url, pool_pre_ping=True)
             self._session_factory = sessionmaker(bind=engine)
 
     def _get_db_session(self) -> Session:

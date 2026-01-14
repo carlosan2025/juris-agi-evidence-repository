@@ -2,11 +2,11 @@
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Index, String, Text, func
-from sqlalchemy.dialects.postgresql import JSON, UUID
+from sqlalchemy import BigInteger, Date, DateTime, Enum, Float, ForeignKey, Index, String, Text, func
+from sqlalchemy.dialects.postgresql import ARRAY, JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from evidence_repository.models.base import Base, TimestampMixin, UUIDMixin
@@ -27,6 +27,44 @@ class ExtractionStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class DocumentType(str, enum.Enum):
+    """Document classification type (inspired by Agent-K)."""
+
+    ACADEMIC_PAPER = "academic_paper"
+    NEWS_ARTICLE = "news_article"
+    BLOG_POST = "blog_post"
+    COMPANY_REPORT = "company_report"
+    FINANCIAL_STATEMENT = "financial_statement"
+    LEGAL_DOCUMENT = "legal_document"
+    TECHNICAL_DOCUMENTATION = "technical_documentation"
+    PRESS_RELEASE = "press_release"
+    MARKETING_MATERIAL = "marketing_material"
+    GOVERNMENT_DOCUMENT = "government_document"
+    PATENT = "patent"
+    PRESENTATION = "presentation"
+    WHITEPAPER = "whitepaper"
+    CASE_STUDY = "case_study"
+    POLICY_DOCUMENT = "policy_document"
+    REGULATORY_FILING = "regulatory_filing"
+    INTERNAL_MEMO = "internal_memo"
+    CONTRACT = "contract"
+    INVOICE = "invoice"
+    SPREADSHEET_DATA = "spreadsheet_data"
+    UNKNOWN = "unknown"
+
+
+class SourceType(str, enum.Enum):
+    """Source of document ingestion."""
+
+    UPLOAD = "upload"
+    URL = "url"
+    EMAIL = "email"
+    API = "api"
+    CRAWLER = "crawler"
+    BATCH_IMPORT = "batch_import"
+    UNKNOWN = "unknown"
+
+
 class Document(Base, UUIDMixin, TimestampMixin):
     """Global document asset.
 
@@ -43,6 +81,33 @@ class Document(Base, UUIDMixin, TimestampMixin):
 
     # Content hash for deduplication (SHA-256 of original file)
     file_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+
+    # Industry profile for extraction (vc, pharma, insurance, general)
+    profile_code: Mapped[str] = mapped_column(String(50), default="general", nullable=False)
+
+    # Document classification (Agent-K inspired)
+    document_type: Mapped[DocumentType | None] = mapped_column(
+        Enum(DocumentType, values_callable=lambda x: [e.value for e in x]),
+        default=DocumentType.UNKNOWN,
+    )
+
+    # Source tracking
+    source_type: Mapped[SourceType | None] = mapped_column(
+        Enum(SourceType, values_callable=lambda x: [e.value for e in x]),
+        default=SourceType.UNKNOWN,
+    )
+    source_url: Mapped[str | None] = mapped_column(Text)
+
+    # Extracted metadata arrays (for efficient filtering)
+    sectors: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
+    main_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    geographies: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
+    company_names: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    authors: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+
+    # Publishing info
+    publishing_organization: Mapped[str | None] = mapped_column(String(300))
+    publication_date: Mapped[date | None] = mapped_column(Date)
 
     # Flexible metadata storage
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
@@ -111,7 +176,7 @@ class DocumentVersion(Base, UUIDMixin):
     # Extracted text content
     extracted_text: Mapped[str | None] = mapped_column(Text)
     extraction_status: Mapped[ExtractionStatus] = mapped_column(
-        Enum(ExtractionStatus),
+        Enum(ExtractionStatus, values_callable=lambda x: [e.value for e in x]),
         default=ExtractionStatus.PENDING,
         nullable=False,
     )
@@ -120,6 +185,11 @@ class DocumentVersion(Base, UUIDMixin):
 
     # Page/sheet count (for PDFs, spreadsheets)
     page_count: Mapped[int | None] = mapped_column()
+
+    # Truthfulness assessment (Agent-K inspired)
+    truthfulness_score: Mapped[float | None] = mapped_column(Float)
+    bias_score: Mapped[float | None] = mapped_column(Float)
+    credibility_assessment: Mapped[dict | None] = mapped_column(JSON)
 
     # Version metadata
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)

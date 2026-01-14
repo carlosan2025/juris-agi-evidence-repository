@@ -101,10 +101,19 @@ Perform semantic search across all documents with optional keyword filtering.
 - `semantic` (default): Vector similarity search using embeddings
 - `keyword`: Full-text keyword search
 - `hybrid`: Combined semantic + keyword search with score fusion
+- `two_stage`: Metadata filter + semantic ranking (Agent-K pattern)
+- `discovery`: Find documents with comprehensive topic coverage
 
 **Keyword Filtering:**
 - `keywords`: List of terms that MUST appear in results (AND logic)
 - `exclude_keywords`: Terms to exclude from results
+
+**Metadata Filtering (for two_stage/discovery):**
+- `sectors`: Filter by industry sectors
+- `topics`: Filter by main topics
+- `document_types`: Filter by document type
+- `geographies`: Filter by geographic regions
+- `companies`: Filter by company names
 
 **Span Filtering:**
 - `span_types`: Filter by span type (text, table, figure, etc.)
@@ -123,6 +132,10 @@ async def search_documents(
     Uses pgvector for efficient similarity search against document embeddings.
     Returns spans with citations only.
     """
+    # Use two-stage search for new Agent-K modes
+    if query.mode in (SearchMode.TWO_STAGE, SearchMode.DISCOVERY):
+        return await _two_stage_search(query, db)
+
     service = SearchService(db=db)
 
     try:
@@ -145,6 +158,106 @@ async def search_documents(
         )
 
     return _service_result_to_response(query.query, result)
+
+
+async def _two_stage_search(
+    query: SearchQuery,
+    db: AsyncSession,
+) -> SearchResult:
+    """Execute two-stage or discovery search using Agent-K patterns."""
+    from evidence_repository.services.two_stage_search import (
+        TwoStageSearch,
+        SearchMode as TSSearchMode,
+        SearchFilters,
+    )
+
+    # Build filters
+    filters = SearchFilters(
+        sectors=query.sectors,
+        topics=query.topics,
+        document_types=query.document_types,
+        geographies=query.geographies,
+        companies=query.companies,
+        project_id=query.project_id,
+        document_ids=query.document_ids,
+    )
+
+    # Determine search mode
+    ts_mode = TSSearchMode.TWO_STAGE
+    if query.mode == SearchMode.DISCOVERY:
+        ts_mode = TSSearchMode.DISCOVERY
+
+    # Execute search
+    search_service = TwoStageSearch(db=db)
+
+    try:
+        response = await search_service.search(
+            query=query.query,
+            filters=filters,
+            mode=ts_mode,
+            limit=query.limit,
+            similarity_threshold=query.similarity_threshold,
+            metadata_weight=query.metadata_weight,
+            semantic_weight=query.semantic_weight,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Two-stage search failed: {e}",
+        )
+
+    # Convert to response format
+    results = []
+    for item in response.results:
+        # Create a simplified citation for two-stage results
+        locator = SpanLocator(
+            type="text",
+            page=item.page,
+            char_offset_start=None,
+            char_offset_end=None,
+        )
+        citation = Citation(
+            span_id=item.span_id or item.id,
+            document_id=item.document_id,
+            document_version_id=item.version_id,
+            document_filename=item.document_filename,
+            span_type=item.span_type or "text",
+            locator=locator,
+            text_excerpt=item.text[:500] if item.text else "",
+        )
+
+        results.append(
+            SearchResultItem(
+                result_id=item.id,
+                similarity=item.combined_score,
+                citation=citation,
+                matched_text=item.text[:500] if item.text else "",
+                highlight_ranges=None,
+                metadata={
+                    "semantic_score": item.semantic_score,
+                    "metadata_score": item.metadata_score,
+                    "combined_score": item.combined_score,
+                    **item.document_metadata,
+                },
+            )
+        )
+
+    return SearchResult(
+        query=query.query,
+        mode=query.mode,
+        results=results,
+        total=response.total_hits,
+        search_time_ms=response.total_time_ms,
+        timestamp=datetime.utcnow(),
+        filters_applied={
+            "mode": response.mode.value,
+            "stage1_time_ms": response.stage1_time_ms,
+            "stage2_time_ms": response.stage2_time_ms,
+            "documents_searched": response.documents_searched,
+            "chunks_searched": response.chunks_searched,
+            **response.filters_applied,
+        },
+    )
 
 
 @router.post(

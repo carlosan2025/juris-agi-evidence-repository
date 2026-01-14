@@ -79,8 +79,11 @@ class IngestionService:
         Returns:
             Document if found, None otherwise.
         """
+        from sqlalchemy.orm import selectinload
         result = await self.db.execute(
-            select(Document).where(
+            select(Document)
+            .options(selectinload(Document.versions))
+            .where(
                 Document.file_hash == file_hash,
                 Document.deleted_at.is_(None),
             )
@@ -93,6 +96,7 @@ class IngestionService:
         content_type: str,
         data: bytes,
         metadata: dict | None = None,
+        profile_code: str = "general",
     ) -> tuple[Document, DocumentVersion]:
         """Ingest a new document into the repository.
 
@@ -101,6 +105,7 @@ class IngestionService:
             content_type: MIME type.
             data: File content.
             metadata: Optional document metadata.
+            profile_code: Industry profile for extraction (vc, pharma, insurance, general).
 
         Returns:
             Tuple of (Document, DocumentVersion).
@@ -110,6 +115,10 @@ class IngestionService:
         # Check for existing document with same hash
         existing = await self.find_by_hash(file_hash)
         if existing:
+            # Update profile if different
+            if existing.profile_code != profile_code:
+                existing.profile_code = profile_code
+                await self.db.flush()
             # Return existing document with its latest version
             return existing, existing.latest_version  # type: ignore
 
@@ -119,6 +128,7 @@ class IngestionService:
             original_filename=filename,
             content_type=content_type,
             file_hash=file_hash,
+            profile_code=profile_code,
             metadata_=metadata or {},
         )
         self.db.add(document)
@@ -151,10 +161,19 @@ class IngestionService:
         Returns:
             New DocumentVersion.
         """
-        # Determine next version number
+        # Determine next version number by querying the database
+        # (async SQLAlchemy doesn't support lazy loading of relationships)
+        from sqlalchemy import select, func
+        from evidence_repository.models.document import DocumentVersion
+
         version_number = 1
-        if document.versions:
-            version_number = max(v.version_number for v in document.versions) + 1
+        result = await self.db.execute(
+            select(func.max(DocumentVersion.version_number))
+            .where(DocumentVersion.document_id == document.id)
+        )
+        max_version = result.scalar()
+        if max_version:
+            version_number = max_version + 1
 
         # Generate storage path
         storage_path = self.generate_storage_path(

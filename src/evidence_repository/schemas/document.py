@@ -53,6 +53,10 @@ class DocumentResponse(BaseSchema):
     file_hash: str | None = Field(
         default=None, description="SHA-256 hash for deduplication"
     )
+    profile_code: str = Field(
+        default="general",
+        description="Industry profile for extraction (vc, pharma, insurance, general)",
+    )
     created_at: datetime = Field(..., description="Document creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     deleted_at: datetime | None = Field(

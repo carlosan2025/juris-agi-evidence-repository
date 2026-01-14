@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     # Authentication
-    api_keys: list[str] = Field(default_factory=lambda: ["dev-key-12345"])
+    api_keys_str: str = Field(default="dev-key-12345", alias="API_KEYS")
     jwt_secret_key: str = "change-me-in-production"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
@@ -93,13 +93,12 @@ class Settings(BaseSettings):
         ]
     )
 
-    @field_validator("api_keys", mode="before")
-    @classmethod
-    def parse_api_keys(cls, v: str | list[str]) -> list[str]:
+    @property
+    def api_keys(self) -> list[str]:
         """Parse comma-separated API keys string into list."""
-        if isinstance(v, str):
-            return [k.strip() for k in v.split(",") if k.strip()]
-        return v
+        if not self.api_keys_str:
+            return ["dev-key-12345"]
+        return [k.strip() for k in self.api_keys_str.split(",") if k.strip()]
 
     @field_validator("cors_origins", mode="before")
     @classmethod

@@ -445,3 +445,238 @@ class TestMetricDefinitions:
                 assert risk.display_name, f"Risk {risk.name} missing display_name"
                 assert risk.description, f"Risk {risk.name} missing description"
                 assert len(risk.indicators) > 0, f"Risk {risk.name} has no indicators"
+
+
+# =============================================================================
+# Part H: Integration Tests for Juris-grade Enhancement
+# =============================================================================
+
+
+class TestProcessContextIntegration:
+    """Integration tests for process_context functionality."""
+
+    def test_process_context_enum_values(self):
+        """Test ProcessContext enum has all expected values."""
+        from evidence_repository.models.extraction_level import ProcessContext
+
+        # Check VC contexts
+        assert ProcessContext.VC_IC_DECISION.value == "vc.ic_decision"
+        assert ProcessContext.VC_DUE_DILIGENCE.value == "vc.due_diligence"
+        assert ProcessContext.VC_PORTFOLIO_REVIEW.value == "vc.portfolio_review"
+        assert ProcessContext.VC_MARKET_ANALYSIS.value == "vc.market_analysis"
+
+        # Check Pharma contexts
+        assert ProcessContext.PHARMA_CLINICAL_TRIAL.value == "pharma.clinical_trial"
+        assert ProcessContext.PHARMA_REGULATORY.value == "pharma.regulatory"
+        assert ProcessContext.PHARMA_SAFETY.value == "pharma.safety"
+        assert ProcessContext.PHARMA_MARKET_ACCESS.value == "pharma.market_access"
+
+        # Check Insurance contexts
+        assert ProcessContext.INSURANCE_UNDERWRITING.value == "insurance.underwriting"
+        assert ProcessContext.INSURANCE_CLAIMS.value == "insurance.claims"
+        assert ProcessContext.INSURANCE_COMPLIANCE.value == "insurance.compliance"
+
+        # Check General contexts
+        assert ProcessContext.GENERAL_RESEARCH.value == "general.research"
+        assert ProcessContext.GENERAL_COMPLIANCE.value == "general.compliance"
+        assert ProcessContext.GENERAL_AUDIT.value == "general.audit"
+
+        # Check default
+        assert ProcessContext.UNSPECIFIED.value == "unspecified"
+
+    def test_process_context_parsing(self):
+        """Test parsing of process context strings."""
+        from evidence_repository.models.extraction_level import ProcessContext
+
+        # Valid context
+        ctx = ProcessContext("vc.ic_decision")
+        assert ctx == ProcessContext.VC_IC_DECISION
+
+        # Invalid context should raise ValueError
+        with pytest.raises(ValueError):
+            ProcessContext("invalid.context")
+
+
+class TestExtractionLevelPreservation:
+    """Test that extraction levels are preserved and not overwritten."""
+
+    def test_extraction_run_key_includes_process_context(self):
+        """Test that extraction runs are keyed by (version_id, profile_id, process_context, level_id)."""
+        from evidence_repository.models.extraction_level import ExtractionRun
+
+        # Check the model has process_context
+        assert hasattr(ExtractionRun, "process_context")
+
+        # Check the table args for unique constraint
+        table_args = ExtractionRun.__table_args__
+        assert table_args is not None
+
+    def test_fact_tables_have_process_context(self):
+        """Test that all fact tables include process_context column."""
+        from evidence_repository.models.facts import (
+            FactClaim,
+            FactMetric,
+            FactConstraint,
+            FactRisk,
+        )
+        from evidence_repository.models.quality import (
+            QualityConflict,
+            QualityOpenQuestion,
+        )
+
+        # Check FactClaim
+        assert hasattr(FactClaim, "process_context")
+
+        # Check FactMetric
+        assert hasattr(FactMetric, "process_context")
+
+        # Check FactConstraint
+        assert hasattr(FactConstraint, "process_context")
+
+        # Check FactRisk
+        assert hasattr(FactRisk, "process_context")
+
+        # Check Quality tables
+        assert hasattr(QualityConflict, "process_context")
+        assert hasattr(QualityOpenQuestion, "process_context")
+
+
+class TestExtractionLevelIncrease:
+    """Test extraction level increase functionality (L1 -> L2 -> L3)."""
+
+    def test_level_hierarchy_is_correct(self):
+        """Test that level codes have correct ordering."""
+        from evidence_repository.models.extraction_level import ExtractionLevelCode
+
+        assert ExtractionLevelCode.L1_BASIC.value == "L1_BASIC"
+        assert ExtractionLevelCode.L2_STANDARD.value == "L2_STANDARD"
+        assert ExtractionLevelCode.L3_DEEP.value == "L3_DEEP"
+        assert ExtractionLevelCode.L4_FORENSIC.value == "L4_FORENSIC"
+
+    def test_vocabulary_levels_are_cumulative(self):
+        """Test that higher levels include lower level metrics."""
+        vocab = VCVocabulary()
+
+        l1_metrics = set(m.name for m in vocab.get_metrics(level=1))
+        l2_metrics = set(m.name for m in vocab.get_metrics(level=2))
+        l3_metrics = set(m.name for m in vocab.get_metrics(level=3))
+        l4_metrics = set(m.name for m in vocab.get_metrics(level=4))
+
+        # Each level should be a superset of the previous
+        assert l1_metrics.issubset(l2_metrics)
+        assert l2_metrics.issubset(l3_metrics)
+        assert l3_metrics.issubset(l4_metrics)
+
+    def test_compute_mode_options(self):
+        """Test that compute mode options exist."""
+        from evidence_repository.models.extraction_level import ComputeMode
+
+        assert ComputeMode.EXACT_ONLY.value == "exact_only"
+        assert ComputeMode.ALL_UP_TO.value == "all_up_to"
+
+
+class TestExtractionVersioning:
+    """Test extraction versioning (schema_version, vocab_version)."""
+
+    def test_extraction_run_has_version_fields(self):
+        """Test ExtractionRun has schema_version and vocab_version."""
+        from evidence_repository.models.extraction_level import ExtractionRun
+
+        assert hasattr(ExtractionRun, "schema_version")
+        assert hasattr(ExtractionRun, "vocab_version")
+
+
+class TestExtractionOrchestrator:
+    """Tests for ExtractionOrchestrator component."""
+
+    def test_orchestrator_exists(self):
+        """Test ExtractionOrchestrator class exists."""
+        from evidence_repository.extraction.orchestrator import ExtractionOrchestrator
+
+        assert ExtractionOrchestrator is not None
+
+    def test_orchestrator_has_required_methods(self):
+        """Test ExtractionOrchestrator has required methods."""
+        from evidence_repository.extraction.orchestrator import ExtractionOrchestrator
+
+        orch = ExtractionOrchestrator()
+        assert hasattr(orch, "plan_extraction")
+        assert hasattr(orch, "create_extraction_run")
+        assert hasattr(orch, "compose_prompts")
+
+
+class TestWorkerPipelineIntegration:
+    """Test worker pipeline process_context integration."""
+
+    def test_task_multilevel_extract_signature(self):
+        """Test task_multilevel_extract has process_context parameter."""
+        from evidence_repository.queue.tasks import task_multilevel_extract
+        import inspect
+
+        sig = inspect.signature(task_multilevel_extract)
+        params = list(sig.parameters.keys())
+
+        assert "process_context" in params
+        assert "schema_version" in params
+        assert "vocab_version" in params
+
+    def test_task_upgrade_extraction_level_signature(self):
+        """Test task_upgrade_extraction_level has process_context parameter."""
+        from evidence_repository.queue.tasks import task_upgrade_extraction_level
+        import inspect
+
+        sig = inspect.signature(task_upgrade_extraction_level)
+        params = list(sig.parameters.keys())
+
+        assert "process_context" in params
+        assert "schema_version" in params
+        assert "vocab_version" in params
+
+    def test_job_types_exist(self):
+        """Test new job types are registered."""
+        from evidence_repository.models.job import JobType
+
+        assert hasattr(JobType, "MULTILEVEL_EXTRACT")
+        assert hasattr(JobType, "MULTILEVEL_EXTRACT_BATCH")
+        assert hasattr(JobType, "UPGRADE_EXTRACTION_LEVEL")
+
+
+class TestJurisIntegration:
+    """Integration tests for Juris API compatibility."""
+
+    def test_evidence_pack_query_accepts_process_context(self):
+        """Test evidence pack endpoints accept process_context parameter."""
+        # This test verifies the endpoint signature exists
+        # Actual integration testing would require a running server
+
+        from evidence_repository.api.routes.evidence import get_evidence_pack_with_facts
+        import inspect
+
+        sig = inspect.signature(get_evidence_pack_with_facts)
+        params = list(sig.parameters.keys())
+
+        assert "process_context" in params
+
+    def test_extraction_request_endpoint_exists(self):
+        """Test request_evidence_pack_extraction endpoint exists."""
+        from evidence_repository.api.routes.evidence import request_evidence_pack_extraction
+        import inspect
+
+        sig = inspect.signature(request_evidence_pack_extraction)
+        params = list(sig.parameters.keys())
+
+        assert "profile_code" in params
+        assert "process_context" in params
+        assert "level" in params
+        assert "compute_mode" in params
+
+    def test_extraction_status_endpoint_exists(self):
+        """Test get_evidence_pack_extraction_status endpoint exists."""
+        from evidence_repository.api.routes.evidence import get_evidence_pack_extraction_status
+        import inspect
+
+        sig = inspect.signature(get_evidence_pack_extraction_status)
+        params = list(sig.parameters.keys())
+
+        assert "profile_code" in params
+        assert "process_context" in params

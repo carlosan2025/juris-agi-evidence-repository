@@ -33,9 +33,9 @@ from evidence_repository.models.extraction_level import (
     ExtractionLevelCode,
     ExtractionProfile,
     ExtractionProfileCode,
-    ExtractionRun as MultiLevelExtractionRun,  # Alias for backward compatibility
-    ExtractionRunStatus as MultiLevelExtractionRunStatus,
+    ExtractionRunStatus as FactExtractionRunStatus,
     ExtractionSetting,
+    FactExtractionRun,
     ProcessContext,
     ScopeType,
 )
@@ -119,8 +119,8 @@ __all__ = [
     "ExtractionLevel",
     "ExtractionLevelCode",
     "ExtractionSetting",
-    "MultiLevelExtractionRun",
-    "MultiLevelExtractionRunStatus",
+    "FactExtractionRun",
+    "FactExtractionRunStatus",
     "ComputeMode",
     "ProcessContext",
     "ScopeType",

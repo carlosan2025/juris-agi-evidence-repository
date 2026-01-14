@@ -151,8 +151,8 @@ class ExtractionProfile(Base, UUIDMixin):
         "ExtractionSetting",
         back_populates="profile",
     )
-    extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
-        "ExtractionRun",
+    extraction_runs: Mapped[list["FactExtractionRun"]] = relationship(
+        "FactExtractionRun",
         back_populates="profile",
     )
 
@@ -199,8 +199,8 @@ class ExtractionLevel(Base, UUIDMixin):
         "ExtractionSetting",
         back_populates="level",
     )
-    extraction_runs: Mapped[list["ExtractionRun"]] = relationship(
-        "ExtractionRun",
+    extraction_runs: Mapped[list["FactExtractionRun"]] = relationship(
+        "FactExtractionRun",
         back_populates="level",
     )
 
@@ -286,8 +286,8 @@ class ExtractionSetting(Base, UUIDMixin, TimestampMixin):
 # =============================================================================
 
 
-class ExtractionRun(Base, UUIDMixin):
-    """Record of an extraction run for a specific (version, profile, process_context, level).
+class FactExtractionRun(Base, UUIDMixin):
+    """Record of a fact extraction run for a specific (version, profile, process_context, level).
 
     Tracks the status and results of fact extraction jobs, ensuring
     idempotency and preventing duplicate extractions. This is separate from
@@ -392,9 +392,9 @@ class ExtractionRun(Base, UUIDMixin):
         "ExtractionLevel",
         back_populates="extraction_runs",
     )
-    parent_run: Mapped["ExtractionRun | None"] = relationship(
-        "ExtractionRun",
-        remote_side="ExtractionRun.id",
+    parent_run: Mapped["FactExtractionRun | None"] = relationship(
+        "FactExtractionRun",
+        remote_side="FactExtractionRun.id",
     )
 
     # Facts relationships

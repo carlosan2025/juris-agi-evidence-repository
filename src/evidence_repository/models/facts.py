@@ -26,7 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from evidence_repository.models.base import Base, UUIDMixin
 
 if TYPE_CHECKING:
-    from evidence_repository.models.extraction_level import ExtractionRun
+    from evidence_repository.models.extraction_level import FactExtractionRun
     from evidence_repository.models.document import Document, DocumentVersion
 
 # Import ProcessContext for use in column definitions (import at runtime, not just type checking)
@@ -202,8 +202,8 @@ class FactClaim(Base, UUIDMixin):
     # Relationships
     document: Mapped["Document"] = relationship("Document")
     document_version: Mapped["DocumentVersion"] = relationship("DocumentVersion")
-    extraction_run: Mapped["ExtractionRun"] = relationship(
-        "ExtractionRun",
+    extraction_run: Mapped["FactExtractionRun"] = relationship(
+        "FactExtractionRun",
         back_populates="facts_claims",
     )
 
@@ -372,8 +372,8 @@ class FactMetric(Base, UUIDMixin):
     # Relationships
     document: Mapped["Document"] = relationship("Document")
     document_version: Mapped["DocumentVersion"] = relationship("DocumentVersion")
-    extraction_run: Mapped["ExtractionRun"] = relationship(
-        "ExtractionRun",
+    extraction_run: Mapped["FactExtractionRun"] = relationship(
+        "FactExtractionRun",
         back_populates="facts_metrics",
     )
 
@@ -491,8 +491,8 @@ class FactConstraint(Base, UUIDMixin):
     # Relationships
     document: Mapped["Document"] = relationship("Document")
     document_version: Mapped["DocumentVersion"] = relationship("DocumentVersion")
-    extraction_run: Mapped["ExtractionRun"] = relationship(
-        "ExtractionRun",
+    extraction_run: Mapped["FactExtractionRun"] = relationship(
+        "FactExtractionRun",
         back_populates="facts_constraints",
     )
 
@@ -622,8 +622,8 @@ class FactRisk(Base, UUIDMixin):
     # Relationships
     document: Mapped["Document"] = relationship("Document")
     document_version: Mapped["DocumentVersion"] = relationship("DocumentVersion")
-    extraction_run: Mapped["ExtractionRun"] = relationship(
-        "ExtractionRun",
+    extraction_run: Mapped["FactExtractionRun"] = relationship(
+        "FactExtractionRun",
         back_populates="facts_risks",
     )
 

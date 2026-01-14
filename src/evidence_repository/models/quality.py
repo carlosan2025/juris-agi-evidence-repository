@@ -21,7 +21,7 @@ from evidence_repository.models.base import Base, UUIDMixin
 
 if TYPE_CHECKING:
     from evidence_repository.models.document import Document, DocumentVersion
-    from evidence_repository.models.extraction_level import ExtractionRun
+    from evidence_repository.models.extraction_level import FactExtractionRun
 
 # Import ProcessContext for use in column definitions
 from evidence_repository.models.extraction_level import ProcessContext
@@ -156,8 +156,8 @@ class QualityConflict(Base, UUIDMixin):
     # Relationships
     document: Mapped["Document"] = relationship("Document")
     document_version: Mapped["DocumentVersion"] = relationship("DocumentVersion")
-    extraction_run: Mapped["ExtractionRun"] = relationship(
-        "ExtractionRun",
+    extraction_run: Mapped["FactExtractionRun"] = relationship(
+        "FactExtractionRun",
         back_populates="quality_conflicts",
     )
 
@@ -272,8 +272,8 @@ class QualityOpenQuestion(Base, UUIDMixin):
     # Relationships
     document: Mapped["Document"] = relationship("Document")
     document_version: Mapped["DocumentVersion"] = relationship("DocumentVersion")
-    extraction_run: Mapped["ExtractionRun"] = relationship(
-        "ExtractionRun",
+    extraction_run: Mapped["FactExtractionRun"] = relationship(
+        "FactExtractionRun",
         back_populates="quality_open_questions",
     )
 

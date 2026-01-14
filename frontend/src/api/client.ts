@@ -1,9 +1,7 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios';
 
-// Use proxy in development, direct URL in production
-const API_BASE_URL = import.meta.env.DEV
-  ? '/api/v1'  // Proxied through Vite dev server
-  : (import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1');
+// Use relative URL - works in both dev (Vite proxy) and production (same domain)
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 const API_KEY = import.meta.env.VITE_API_KEY || 'dev-key-12345';
 
 class ApiClient {

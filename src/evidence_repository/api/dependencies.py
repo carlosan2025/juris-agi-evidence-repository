@@ -49,9 +49,11 @@ async def verify_api_key(api_key: str) -> User:
 
     if api_key in settings.api_keys:
         # Create a user based on the API key
-        # In production, you'd look up the key in a database
+        # Use hash to avoid exposing any part of the key
+        import hashlib
+        key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:12]
         return User(
-            id=f"apikey:{api_key[:8]}...",
+            id=f"apikey:{key_hash}",
             api_key=api_key,
         )
 

@@ -96,6 +96,10 @@ class JobQueue:
             sync_url = self.settings.database_url.replace(
                 "postgresql+asyncpg://", "postgresql+psycopg://"
             )
+            # psycopg3 uses 'sslmode' instead of 'ssl' parameter
+            # Neon URLs use ssl=require, convert to sslmode=require for psycopg3
+            sync_url = sync_url.replace("ssl=require", "sslmode=require")
+            sync_url = sync_url.replace("ssl=true", "sslmode=require")
             # Use NullPool in serverless for fresh connections each time
             if IS_SERVERLESS:
                 engine = create_engine(sync_url, poolclass=NullPool)

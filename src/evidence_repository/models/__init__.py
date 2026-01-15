@@ -38,6 +38,7 @@ from evidence_repository.models.evidence import (
     Span,
     SpanType,
 )
+from evidence_repository.models.folder import Folder
 from evidence_repository.models.extraction_level import (
     ComputeMode,
     ExtractionLevel,
@@ -95,6 +96,8 @@ __all__ = [
     # Project
     "Project",
     "ProjectDocument",
+    # Folder
+    "Folder",
     # Job
     "Job",
     "JobStatus",

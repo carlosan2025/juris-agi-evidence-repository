@@ -7,6 +7,7 @@ from evidence_repository.api.routes.debug import router as debug_router
 from evidence_repository.api.routes.documents import router as documents_router
 from evidence_repository.api.routes.evidence import router as evidence_router
 from evidence_repository.api.routes.extraction import router as extraction_router
+from evidence_repository.api.routes.folders import router as folders_router
 from evidence_repository.api.routes.health import router as health_router
 from evidence_repository.api.routes.ingest import router as ingest_router
 from evidence_repository.api.routes.jobs import router as jobs_router
@@ -21,6 +22,7 @@ router = APIRouter()
 router.include_router(health_router, tags=["Health"])
 router.include_router(documents_router, prefix="/documents", tags=["Documents"])
 router.include_router(projects_router, prefix="/projects", tags=["Projects"])
+router.include_router(folders_router, prefix="/projects", tags=["Folders"])
 router.include_router(search_router, prefix="/search", tags=["Search"])
 router.include_router(evidence_router, tags=["Evidence"])
 router.include_router(extraction_router, tags=["Extraction"])

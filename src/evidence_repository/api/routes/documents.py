@@ -1443,3 +1443,80 @@ async def list_document_spans(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get(
+    "/{document_id}/embeddings",
+    summary="List Document Embeddings",
+    description="List all embedding chunks generated for a document.",
+)
+async def list_document_embeddings(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """List embedding chunks for a document."""
+    from evidence_repository.models.embedding import EmbeddingChunk
+
+    # Get document with latest version
+    result = await db.execute(
+        select(Document)
+        .options(selectinload(Document.versions))
+        .where(Document.id == document_id, Document.deleted_at.is_(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    version = document.versions[0] if document.versions else None
+    if not version:
+        return {"items": [], "total": 0}
+
+    # Get embedding chunks (without the actual vector for efficiency)
+    embeddings_result = await db.execute(
+        select(EmbeddingChunk)
+        .where(EmbeddingChunk.document_version_id == version.id)
+        .order_by(EmbeddingChunk.chunk_index)
+        .offset(offset)
+        .limit(limit)
+    )
+    embeddings = embeddings_result.scalars().all()
+
+    # Get total count
+    from sqlalchemy import func
+    count_result = await db.execute(
+        select(func.count(EmbeddingChunk.id)).where(
+            EmbeddingChunk.document_version_id == version.id
+        )
+    )
+    total = count_result.scalar() or 0
+
+    # Get embedding model info from settings
+    settings = get_settings()
+
+    return {
+        "items": [
+            {
+                "id": str(emb.id),
+                "chunk_index": emb.chunk_index,
+                "text": emb.text[:500] + "..." if len(emb.text) > 500 else emb.text,
+                "text_length": len(emb.text),
+                "char_start": emb.char_start,
+                "char_end": emb.char_end,
+                "metadata": emb.metadata_,
+                "created_at": emb.created_at.isoformat() if emb.created_at else None,
+            }
+            for emb in embeddings
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "model": settings.openai_embedding_model,
+        "dimensions": 1536,
+    }

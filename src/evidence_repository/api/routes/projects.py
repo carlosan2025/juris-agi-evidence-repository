@@ -320,11 +320,29 @@ async def attach_document(
             detail="Document already attached to this project",
         )
 
+    # Validate folder if specified
+    if request.folder_id:
+        from evidence_repository.models.folder import Folder
+
+        folder_result = await db.execute(
+            select(Folder).where(
+                Folder.id == request.folder_id,
+                Folder.project_id == project_id,
+                Folder.deleted_at.is_(None),
+            )
+        )
+        if not folder_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Folder not found or does not belong to this project",
+            )
+
     # Create attachment
     project_document = ProjectDocument(
         project_id=project_id,
         document_id=request.document_id,
         pinned_version_id=request.pinned_version_id,
+        folder_id=request.folder_id,
         attached_by=user.id,
         notes=request.notes,
     )
@@ -339,23 +357,41 @@ async def attach_document(
     "/{project_id}/documents",
     response_model=list[ProjectDocumentResponse],
     summary="List Project Documents",
-    description="List all documents attached to a project.",
+    description="List all documents attached to a project, optionally filtered by folder.",
 )
 async def list_project_documents(
     project_id: uuid.UUID,
+    folder_id: uuid.UUID | None = Query(
+        default=None,
+        description="Filter by folder ID. Use 'root' for documents at project root (no folder).",
+    ),
+    root_only: bool = Query(
+        default=False,
+        description="If true, return only documents at project root (no folder)",
+    ),
     db: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> list[ProjectDocumentResponse]:
     """List documents attached to a project."""
-    result = await db.execute(
+    query = (
         select(ProjectDocument)
         .options(
             selectinload(ProjectDocument.document).selectinload(Document.versions),
             selectinload(ProjectDocument.pinned_version),
+            selectinload(ProjectDocument.folder),
         )
         .where(ProjectDocument.project_id == project_id)
-        .order_by(ProjectDocument.attached_at.desc())
     )
+
+    # Filter by folder
+    if folder_id is not None:
+        query = query.where(ProjectDocument.folder_id == folder_id)
+    elif root_only:
+        query = query.where(ProjectDocument.folder_id.is_(None))
+
+    query = query.order_by(ProjectDocument.attached_at.desc())
+
+    result = await db.execute(query)
     project_documents = result.scalars().all()
 
     return [ProjectDocumentResponse.model_validate(pd) for pd in project_documents]

@@ -148,6 +148,9 @@ export const documentsApi = {
 
   getSpans: (id: string, params?: { limit?: number; offset?: number }) =>
     apiClient.get<SpanListResponse>(`/documents/${id}/spans`, params),
+
+  getEmbeddings: (id: string, params?: { limit?: number; offset?: number }) =>
+    apiClient.get<EmbeddingListResponse>(`/documents/${id}/embeddings`, params),
 };
 
 // Document statistics response type
@@ -189,6 +192,27 @@ export interface SpanItem {
   text_length: number;
   start_locator: Record<string, unknown>;
   end_locator: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+}
+
+// Embedding list response type
+export interface EmbeddingListResponse {
+  items: EmbeddingItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  model: string;
+  dimensions: number;
+}
+
+export interface EmbeddingItem {
+  id: string;
+  chunk_index: number;
+  text: string;
+  text_length: number;
+  char_start: number | null;
+  char_end: number | null;
   metadata: Record<string, unknown>;
   created_at: string | null;
 }

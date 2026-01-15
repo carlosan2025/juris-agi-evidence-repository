@@ -13,6 +13,7 @@ from evidence_repository.models.base import Base, TimestampMixin, UUIDMixin
 if TYPE_CHECKING:
     from evidence_repository.models.document import Document, DocumentVersion
     from evidence_repository.models.evidence import Claim, EvidencePack, Metric
+    from evidence_repository.models.folder import Folder
 
 
 class Project(Base, UUIDMixin, TimestampMixin):
@@ -57,6 +58,12 @@ class Project(Base, UUIDMixin, TimestampMixin):
         "EvidencePack",
         back_populates="project",
         cascade="all, delete-orphan",
+    )
+    folders: Mapped[list["Folder"]] = relationship(
+        "Folder",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="Folder.display_order, Folder.name",
     )
 
     # Indexes
@@ -114,10 +121,22 @@ class ProjectDocument(Base, UUIDMixin):
     # Notes about why this document was attached
     notes: Mapped[str | None] = mapped_column(Text)
 
+    # Folder assignment (null = project root)
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("folders.id", ondelete="SET NULL"),
+        index=True,
+    )
+
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="project_documents")
     document: Mapped["Document"] = relationship("Document", back_populates="project_documents")
     pinned_version: Mapped["DocumentVersion | None"] = relationship("DocumentVersion")
+    folder: Mapped["Folder | None"] = relationship(
+        "Folder",
+        back_populates="project_documents",
+        foreign_keys=[folder_id],
+    )
 
     # Constraints and indexes
     __table_args__ = (

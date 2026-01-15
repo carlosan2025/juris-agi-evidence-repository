@@ -88,10 +88,81 @@ export interface ProjectDocument {
   project_id: string;
   document_id: string;
   pinned_version_id: string | null;
+  folder_id: string | null;
   attached_at: string;
   attached_by: string | null;
   notes: string | null;
   document: Document | null;
+}
+
+// Folder types
+export interface Folder {
+  id: string;
+  name: string;
+  description: string | null;
+  project_id: string;
+  parent_folder_id: string | null;
+  display_order: number;
+  color: string | null;
+  icon: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  document_count: number;
+  child_count: number;
+}
+
+export interface FolderTreeNode {
+  id: string;
+  name: string;
+  description: string | null;
+  parent_folder_id: string | null;
+  display_order: number;
+  color: string | null;
+  icon: string | null;
+  document_count: number;
+  children: FolderTreeNode[];
+}
+
+export interface FolderTreeResponse {
+  project_id: string;
+  folders: FolderTreeNode[];
+  total_folders: number;
+  total_documents: number;
+  root_document_count: number;
+}
+
+export interface FolderCreate {
+  name: string;
+  description?: string;
+  parent_folder_id?: string;
+  display_order?: number;
+  color?: string;
+  icon?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FolderUpdate {
+  name?: string;
+  description?: string;
+  display_order?: number;
+  color?: string;
+  icon?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface MoveDocumentRequest {
+  folder_id: string | null;
+}
+
+export interface MoveFolderRequest {
+  parent_folder_id: string | null;
+}
+
+export interface BulkMoveDocumentsRequest {
+  document_ids: string[];
+  folder_id: string | null;
 }
 
 export interface ProjectCreate {

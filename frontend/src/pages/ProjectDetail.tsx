@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
@@ -11,14 +12,18 @@ import {
   AlertCircle,
   Calendar,
   Hash,
+  Folder,
 } from 'lucide-react';
 import { projectsApi } from '../api';
+import { foldersApi } from '../api/folders';
 import { Card } from '../components/ui';
-import type { ProjectDocument, ExtractionStatus } from '../types';
+import { FolderTree } from '../components/FolderTree';
+import type { ProjectDocument, ExtractionStatus, FolderTreeNode } from '../types';
 
 export function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
 
   // Fetch project details
   const { data: project, isLoading: projectLoading, error: projectError } = useQuery({
@@ -27,10 +32,23 @@ export function ProjectDetail() {
     enabled: !!projectId,
   });
 
-  // Fetch project documents
+  // Fetch folder tree
+  const { data: folderTree, isLoading: foldersLoading } = useQuery({
+    queryKey: ['folder-tree', projectId],
+    queryFn: () => foldersApi.getTree(projectId!),
+    enabled: !!projectId,
+  });
+
+  // Fetch project documents - filtered by selected folder
   const { data: documents, isLoading: docsLoading } = useQuery({
-    queryKey: ['project-documents', projectId],
-    queryFn: () => projectsApi.getDocuments(projectId!),
+    queryKey: ['project-documents', projectId, selectedFolderId],
+    queryFn: () => {
+      if (selectedFolderId) {
+        return projectsApi.getDocuments(projectId!, { folder_id: selectedFolderId });
+      }
+      // null means show all documents (no filter)
+      return projectsApi.getDocuments(projectId!);
+    },
     enabled: !!projectId,
   });
 
@@ -65,6 +83,22 @@ export function ProjectDetail() {
         return 'Pending';
     }
   };
+
+  // Find folder name for breadcrumb
+  const findFolderName = (folders: FolderTreeNode[], id: string): string | null => {
+    for (const folder of folders) {
+      if (folder.id === id) return folder.name;
+      if (folder.children) {
+        const found = findFolderName(folder.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  const selectedFolderName = selectedFolderId && folderTree?.folders
+    ? findFolderName(folderTree.folders, selectedFolderId)
+    : null;
 
   if (projectLoading) {
     return (
@@ -114,16 +148,27 @@ export function ProjectDetail() {
       </div>
 
       {/* Project Info */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card className="p-4">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-500">Documents</span>
             <FileText className="h-5 w-5 text-blue-500" />
           </div>
           <p className="text-2xl font-bold text-gray-900 mt-2">
-            {docsLoading ? '...' : documents?.length ?? 0}
+            {folderTree?.total_documents ?? (docsLoading ? '...' : documents?.length ?? 0)}
           </p>
           <p className="text-xs text-gray-400 mt-1">attached to project</p>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-500">Folders</span>
+            <Folder className="h-5 w-5 text-amber-500" />
+          </div>
+          <p className="text-2xl font-bold text-gray-900 mt-2">
+            {foldersLoading ? '...' : folderTree?.total_folders ?? 0}
+          </p>
+          <p className="text-xs text-gray-400 mt-1">for organization</p>
         </Card>
 
         {project.case_ref && (
@@ -152,80 +197,118 @@ export function ProjectDetail() {
         </Card>
       </div>
 
-      {/* Documents List */}
-      <Card className="p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Project Documents
-        </h2>
+      {/* Main Content: Folder Sidebar + Documents */}
+      <div className="flex gap-6">
+        {/* Folder Sidebar */}
+        <Card className="w-64 flex-shrink-0 overflow-hidden">
+          {foldersLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="h-5 w-5 animate-spin text-gray-400" />
+            </div>
+          ) : (
+            <FolderTree
+              projectId={projectId!}
+              folders={folderTree?.folders ?? []}
+              selectedFolderId={selectedFolderId}
+              rootDocumentCount={folderTree?.root_document_count ?? 0}
+              onSelectFolder={setSelectedFolderId}
+            />
+          )}
+        </Card>
 
-        {docsLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <RefreshCw className="h-6 w-6 animate-spin text-gray-400" />
+        {/* Documents List */}
+        <Card className="flex-1 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900">
+              {selectedFolderName ? (
+                <span className="flex items-center gap-2">
+                  <Folder className="h-5 w-5 text-amber-500" />
+                  {selectedFolderName}
+                </span>
+              ) : (
+                'All Documents'
+              )}
+            </h2>
+            {docsLoading && (
+              <RefreshCw className="h-4 w-4 animate-spin text-gray-400" />
+            )}
           </div>
-        ) : !documents || documents.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            <FileText className="h-12 w-12 mx-auto text-gray-300 mb-3" />
-            <p>No documents attached to this project</p>
-            <p className="text-sm mt-1">
-              Attach documents from the Documents page
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {documents.map((pd: ProjectDocument) => {
-              const doc = pd.document;
-              if (!doc) return null;
 
-              const version = doc.latest_version;
-              const status = version?.extraction_status;
+          {docsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw className="h-6 w-6 animate-spin text-gray-400" />
+            </div>
+          ) : !documents || documents.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <FileText className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+              <p>
+                {selectedFolderId
+                  ? 'No documents in this folder'
+                  : 'No documents attached to this project'}
+              </p>
+              <p className="text-sm mt-1">
+                {selectedFolderId
+                  ? 'Move documents here or select a different folder'
+                  : 'Attach documents from the Documents page'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {documents.map((pd: ProjectDocument) => {
+                const doc = pd.document;
+                if (!doc) return null;
 
-              return (
-                <Link
-                  key={pd.id}
-                  to={`/documents/${doc.id}`}
-                  className="block border rounded-lg p-4 hover:bg-gray-50 transition-colors"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <FileText className="h-5 w-5 text-gray-400 flex-shrink-0" />
-                      <div className="min-w-0">
-                        <p className="font-medium text-gray-900 truncate">
-                          {doc.original_filename}
-                        </p>
-                        <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
-                          <span>{doc.content_type}</span>
-                          {version && (
-                            <span>{formatFileSize(version.file_size)}</span>
-                          )}
-                          <span>
-                            Attached {format(new Date(pd.attached_at), 'MMM d, yyyy')}
-                          </span>
+                const version = doc.latest_version;
+                const status = version?.extraction_status;
+
+                return (
+                  <Link
+                    key={pd.id}
+                    to={`/documents/${doc.id}`}
+                    className="block border rounded-lg p-4 hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <FileText className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 truncate">
+                            {doc.original_filename}
+                          </p>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                            <span>{doc.content_type}</span>
+                            {version && (
+                              <span>{formatFileSize(version.file_size)}</span>
+                            )}
+                            <span>
+                              Attached {format(new Date(pd.attached_at), 'MMM d, yyyy')}
+                            </span>
+                          </div>
                         </div>
                       </div>
+                      <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+                        {getStatusIcon(status)}
+                        <span className={`text-sm ${
+                          status === 'completed' ? 'text-green-600' :
+                          status === 'failed' ? 'text-red-600' :
+                          status === 'processing' ? 'text-yellow-600' :
+                          'text-gray-500'
+                        }`}>
+                          {getStatusLabel(status)}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-                      {getStatusIcon(status)}
-                      <span className={`text-sm ${
-                        status === 'completed' ? 'text-green-600' :
-                        status === 'failed' ? 'text-red-600' :
-                        status === 'processing' ? 'text-yellow-600' :
-                        'text-gray-500'
-                      }`}>
-                        {getStatusLabel(status)}
-                      </span>
-                    </div>
-                  </div>
-                  {pd.notes && (
-                    <p className="mt-2 text-sm text-gray-600 pl-8">
-                      {pd.notes}
-                    </p>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </Card>
+                    {pd.notes && (
+                      <p className="mt-2 text-sm text-gray-600 pl-8">
+                        {pd.notes}
+                      </p>
+                    )}
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }

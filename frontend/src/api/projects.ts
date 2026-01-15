@@ -15,8 +15,8 @@ export const projectsApi = {
   delete: (id: string) => apiClient.delete<void>(`/projects/${id}`),
 
   // Document attachment - backend returns list[ProjectDocumentResponse], not paginated
-  getDocuments: (projectId: string) =>
-    apiClient.get<ProjectDocument[]>(`/projects/${projectId}/documents`),
+  getDocuments: (projectId: string, params?: { folder_id?: string; root_only?: boolean }) =>
+    apiClient.get<ProjectDocument[]>(`/projects/${projectId}/documents`, params),
 
   attachDocument: (projectId: string, documentId: string, pinnedVersionId?: string) =>
     apiClient.post<ProjectDocument>(`/projects/${projectId}/documents`, {

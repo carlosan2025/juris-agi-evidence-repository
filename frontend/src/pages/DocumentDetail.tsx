@@ -15,9 +15,10 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  X,
 } from 'lucide-react';
 import { documentsApi } from '../api/documents';
-import type { SpanItem } from '../api/documents';
+import type { SpanItem, EmbeddingItem } from '../api/documents';
 import { Card } from '../components/ui';
 
 export function DocumentDetail() {
@@ -25,6 +26,9 @@ export function DocumentDetail() {
   const navigate = useNavigate();
   const [showAllSpans, setShowAllSpans] = useState(false);
   const [expandedSpan, setExpandedSpan] = useState<string | null>(null);
+  const [showEmbeddingsModal, setShowEmbeddingsModal] = useState(false);
+  const [showAllEmbeddings, setShowAllEmbeddings] = useState(false);
+  const [expandedEmbedding, setExpandedEmbedding] = useState<string | null>(null);
 
   // Fetch document details
   const { data: document, isLoading: docLoading, error: docError } = useQuery({
@@ -45,6 +49,13 @@ export function DocumentDetail() {
     queryKey: ['document-spans', documentId, showAllSpans],
     queryFn: () => documentsApi.getSpans(documentId!, { limit: showAllSpans ? 500 : 10 }),
     enabled: !!documentId,
+  });
+
+  // Fetch embeddings (only when modal is open)
+  const { data: embeddingsData, isLoading: embeddingsLoading } = useQuery({
+    queryKey: ['document-embeddings', documentId, showAllEmbeddings],
+    queryFn: () => documentsApi.getEmbeddings(documentId!, { limit: showAllEmbeddings ? 500 : 20 }),
+    enabled: !!documentId && showEmbeddingsModal,
   });
 
   const handleDownload = async () => {
@@ -180,8 +191,19 @@ export function DocumentDetail() {
           <p className="text-xs text-gray-400 mt-1">text chunks extracted</p>
         </Card>
 
-        {/* Embeddings Count */}
-        <Card className="p-4">
+        {/* Embeddings Count - Clickable */}
+        <Card
+          className={`p-4 transition-colors ${
+            (stats?.embeddings.total ?? 0) > 0
+              ? 'cursor-pointer hover:bg-blue-50 hover:border-blue-200'
+              : ''
+          }`}
+          onClick={() => {
+            if ((stats?.embeddings.total ?? 0) > 0) {
+              setShowEmbeddingsModal(true);
+            }
+          }}
+        >
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-gray-500">Embeddings</span>
             <Box className="h-5 w-5 text-blue-500" />
@@ -189,7 +211,9 @@ export function DocumentDetail() {
           <p className="text-2xl font-bold text-gray-900 mt-2">
             {statsLoading ? '...' : stats?.embeddings.total || 0}
           </p>
-          <p className="text-xs text-gray-400 mt-1">vector embeddings</p>
+          <p className="text-xs text-gray-400 mt-1">
+            {(stats?.embeddings.total ?? 0) > 0 ? 'click to view chunks' : 'vector embeddings'}
+          </p>
         </Card>
 
         {/* Text Length */}
@@ -362,6 +386,108 @@ export function DocumentDetail() {
           </Card>
         </div>
       </div>
+
+      {/* Embeddings Modal */}
+      {showEmbeddingsModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex min-h-full items-center justify-center p-4">
+            <div
+              className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
+              onClick={() => setShowEmbeddingsModal(false)}
+            />
+            <div className="relative w-full max-w-4xl bg-white rounded-xl shadow-xl transform transition-all max-h-[85vh] flex flex-col">
+              {/* Header */}
+              <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                    <Box className="h-5 w-5 text-blue-500" />
+                    Embedding Chunks
+                  </h2>
+                  {embeddingsData && (
+                    <p className="text-sm text-gray-500 mt-1">
+                      {embeddingsData.total} chunks using {embeddingsData.model} ({embeddingsData.dimensions}D)
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setShowEmbeddingsModal(false)}
+                  className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto p-4">
+                {embeddingsLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <RefreshCw className="h-8 w-8 animate-spin text-gray-400" />
+                  </div>
+                ) : embeddingsData?.items.length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <Box className="h-12 w-12 mx-auto text-gray-300 mb-3" />
+                    <p>No embeddings generated yet</p>
+                    <p className="text-sm mt-1">Processing may still be in progress</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {embeddingsData?.items.map((embedding: EmbeddingItem) => (
+                      <div
+                        key={embedding.id}
+                        className="border rounded-lg p-3 hover:bg-gray-50 transition-colors"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-medium">
+                                Chunk {embedding.chunk_index + 1}
+                              </span>
+                              <span className="text-xs text-gray-400">
+                                {embedding.text_length} chars
+                              </span>
+                              {embedding.char_start !== null && embedding.char_end !== null && (
+                                <span className="text-xs text-gray-400">
+                                  Position: {embedding.char_start}-{embedding.char_end}
+                                </span>
+                              )}
+                            </div>
+                            <p className={`text-sm text-gray-700 whitespace-pre-wrap ${
+                              expandedEmbedding === embedding.id ? '' : 'line-clamp-3'
+                            }`}>
+                              {embedding.text}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => setExpandedEmbedding(
+                              expandedEmbedding === embedding.id ? null : embedding.id
+                            )}
+                            className="ml-2 p-1 hover:bg-gray-200 rounded flex-shrink-0"
+                          >
+                            {expandedEmbedding === embedding.id ? (
+                              <ChevronUp className="h-4 w-4 text-gray-400" />
+                            ) : (
+                              <ChevronDown className="h-4 w-4 text-gray-400" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    {embeddingsData && embeddingsData.total > embeddingsData.items.length && !showAllEmbeddings && (
+                      <button
+                        onClick={() => setShowAllEmbeddings(true)}
+                        className="w-full py-2 text-sm text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition-colors"
+                      >
+                        Show all {embeddingsData.total} chunks
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

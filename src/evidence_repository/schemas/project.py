@@ -82,6 +82,10 @@ class AttachDocumentRequest(BaseModel):
         default=None,
         description="Optional: pin to specific version (null = latest)",
     )
+    folder_id: UUID | None = Field(
+        default=None,
+        description="Folder to place document in (null = project root)",
+    )
     notes: str | None = Field(
         default=None, description="Notes about why document was attached"
     )
@@ -95,6 +99,9 @@ class ProjectDocumentResponse(BaseSchema):
     document_id: UUID = Field(..., description="Document ID")
     pinned_version_id: UUID | None = Field(
         default=None, description="Pinned version ID (null = latest)"
+    )
+    folder_id: UUID | None = Field(
+        default=None, description="Folder ID (null = project root)"
     )
     attached_at: datetime = Field(..., description="When document was attached")
     attached_by: str | None = Field(default=None, description="Who attached it")

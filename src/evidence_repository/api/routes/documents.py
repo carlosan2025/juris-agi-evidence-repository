@@ -631,7 +631,6 @@ async def delete_document(
 ) -> None:
     """Permanently delete a document, cancel any pending jobs, and remove files from storage."""
     import logging
-    from evidence_repository.models.job import Job, JobStatus
 
     result = await db.execute(
         select(Document)
@@ -651,49 +650,59 @@ async def delete_document(
     canceled_jobs = 0
 
     # Cancel any pending/running jobs for this document's versions
-    if version_ids:
-        # Find jobs that reference these versions in their payload
-        jobs_result = await db.execute(
-            select(Job).where(
-                Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING])
-            )
-        )
-        jobs = jobs_result.scalars().all()
+    try:
+        from evidence_repository.models.job import Job, JobStatus
 
-        for job in jobs:
-            # Check if job payload contains any of our version IDs
-            payload_version_id = job.payload.get("version_id")
-            payload_document_id = job.payload.get("document_id")
-            if payload_version_id in version_ids or payload_document_id == str(document_id):
-                job.status = JobStatus.CANCELED
-                job.error = f"Document {document_id} was deleted"
-                canceled_jobs += 1
-                logging.info(f"Canceled job {job.id} for deleted document {document_id}")
+        if version_ids:
+            # Find jobs that reference these versions in their payload
+            jobs_result = await db.execute(
+                select(Job).where(
+                    Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING])
+                )
+            )
+            jobs = jobs_result.scalars().all()
+
+            for job in jobs:
+                # Check if job payload contains any of our version IDs
+                payload_version_id = job.payload.get("version_id") if job.payload else None
+                payload_document_id = job.payload.get("document_id") if job.payload else None
+                if payload_version_id in version_ids or payload_document_id == str(document_id):
+                    job.status = JobStatus.CANCELED
+                    job.error = f"Document {document_id} was deleted"
+                    canceled_jobs += 1
+                    logging.info(f"Canceled job {job.id} for deleted document {document_id}")
+    except Exception as e:
+        # Jobs table might not exist or other issue - log and continue
+        logging.warning(f"Could not cancel jobs for document {document_id}: {e}")
 
     # Delete files from storage for each version
     for version in document.versions:
         try:
-            # Convert storage path key to full URI using storage backend's method
-            file_uri = storage._key_to_uri(version.storage_path)
-            await storage.delete(file_uri)
+            # Only attempt delete if storage_path is set
+            if version.storage_path:
+                file_uri = storage._key_to_uri(version.storage_path)
+                await storage.delete(file_uri)
         except Exception as e:
             # Log but continue - file might already be deleted or upload never completed
             logging.warning(f"Failed to delete file {version.storage_path}: {e}")
 
     # Write audit log for deletion
-    await _write_audit_log(
-        db=db,
-        action=AuditAction.DOCUMENT_DELETE,
-        entity_type="document",
-        entity_id=document_id,
-        actor_id=user.id,
-        details={
-            "filename": document.filename,
-            "version_count": len(document.versions),
-            "canceled_jobs": canceled_jobs,
-        },
-        request=request,
-    )
+    try:
+        await _write_audit_log(
+            db=db,
+            action=AuditAction.DOCUMENT_DELETE,
+            entity_type="document",
+            entity_id=document_id,
+            actor_id=user.id,
+            details={
+                "filename": document.filename,
+                "version_count": len(document.versions),
+                "canceled_jobs": canceled_jobs,
+            },
+            request=request,
+        )
+    except Exception as e:
+        logging.warning(f"Failed to write audit log for document {document_id} deletion: {e}")
 
     # Hard delete from database (cascades to versions, spans, etc.)
     await db.delete(document)

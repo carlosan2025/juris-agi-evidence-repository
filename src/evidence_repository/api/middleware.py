@@ -201,16 +201,34 @@ class ErrorHandlingMiddleware(BaseHTTPMiddleware):
         self, request: Request, call_next: Callable[[Request], Any]
     ) -> Response:
         """Process request and handle exceptions."""
+        import os
+        import traceback
+
         try:
             return await call_next(request)
         except Exception as e:
             logger.exception(f"Unhandled exception: {e}")
+
+            # In debug mode or serverless, include more error details for debugging
+            is_debug = os.environ.get("DEBUG", "").lower() in ("true", "1")
+            is_serverless = os.environ.get("VERCEL") == "1"
+
+            details: dict[str, Any] = {
+                "request_id": getattr(request.state, "request_id", None),
+            }
+
+            # Include error details in serverless mode to help debug deployment issues
+            if is_debug or is_serverless:
+                details["error_type"] = type(e).__name__
+                details["error_message"] = str(e)
+                details["traceback"] = traceback.format_exc().split("\n")[-10:]
+
             return JSONResponse(
                 status_code=500,
                 content={
                     "error": "internal_server_error",
                     "message": "An unexpected error occurred",
-                    "details": {"request_id": getattr(request.state, "request_id", None)},
+                    "details": details,
                 },
             )
 

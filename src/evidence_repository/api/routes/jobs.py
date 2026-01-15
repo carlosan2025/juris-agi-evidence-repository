@@ -209,6 +209,242 @@ async def cancel_job(
         )
 
 
+@router.post(
+    "/{job_id}/run",
+    response_model=JobResponse,
+    summary="Run Job Synchronously",
+    description="""
+Run a queued job synchronously and wait for completion.
+
+This endpoint is for serverless environments (Vercel) where background tasks
+don't work. The job will be executed immediately and the response will contain
+the result.
+
+**Note:** This endpoint blocks until the job completes. Use with caution for
+long-running jobs as it may timeout.
+    """,
+)
+async def run_job_sync(
+    job_id: str,
+    user: User = Depends(get_current_user),
+) -> JobResponse:
+    """Run a queued job synchronously."""
+    import uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import select, create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from evidence_repository.config import get_settings
+    from evidence_repository.models.job import Job, JobStatus as DBJobStatus
+    from evidence_repository.queue.tasks import task_process_document_version
+
+    settings = get_settings()
+
+    # Create sync database session
+    sync_url = settings.database_url.replace("+asyncpg", "+psycopg")
+    sync_url = sync_url.replace("ssl=require", "sslmode=require")
+    engine = create_engine(sync_url)
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+
+    try:
+        # Load job from database
+        job_uuid = uuid.UUID(job_id)
+        job = db.execute(
+            select(Job).where(Job.id == job_uuid)
+        ).scalar_one_or_none()
+
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job {job_id} not found",
+            )
+
+        if job.status != DBJobStatus.QUEUED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Job is not queued (status: {job.status.value})",
+            )
+
+        # Update status to RUNNING
+        job.status = DBJobStatus.RUNNING
+        job.started_at = datetime.now(timezone.utc)
+        job.worker_id = "serverless-sync"
+        job.attempts += 1
+        job.progress = 0
+        job.progress_message = "Starting synchronous execution"
+        db.commit()
+
+        # Execute the job based on type
+        try:
+            payload = job.payload or {}
+
+            # Progress callback
+            def update_progress(progress: float, message: str | None = None) -> None:
+                try:
+                    job.progress = int(min(100, max(0, progress)))
+                    if message:
+                        job.progress_message = message
+                    db.commit()
+                except Exception:
+                    pass
+
+            if job.type.value == "process_document_version":
+                result = task_process_document_version(
+                    version_id=payload.get("version_id"),
+                    profile_code=payload.get("profile_code", "general"),
+                    extraction_level=payload.get("extraction_level", 2),
+                    reprocess=payload.get("reprocess", False),
+                )
+            else:
+                raise ValueError(f"Synchronous execution not supported for job type: {job.type.value}")
+
+            # Update status to SUCCEEDED
+            job.status = DBJobStatus.SUCCEEDED
+            job.finished_at = datetime.now(timezone.utc)
+            job.progress = 100
+            job.progress_message = "Job completed successfully"
+            job.result = result
+            job.error = None
+            db.commit()
+
+        except Exception as e:
+            # Update status to FAILED
+            job.status = DBJobStatus.FAILED
+            job.finished_at = datetime.now(timezone.utc)
+            job.error = str(e)
+            job.progress_message = f"Failed: {str(e)[:200]}"
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Job execution failed: {str(e)}",
+            )
+
+        return JobResponse(
+            job_id=str(job.id),
+            job_type=job.type.value,
+            status=job.status.value,
+            created_at=job.created_at.isoformat() if job.created_at else None,
+            started_at=job.started_at.isoformat() if job.started_at else None,
+            ended_at=job.finished_at.isoformat() if job.finished_at else None,
+            result=job.result,
+            error=job.error,
+            progress=job.progress,
+            progress_message=job.progress_message,
+            metadata={"payload": job.payload},
+        )
+
+    finally:
+        db.close()
+
+
+@router.post(
+    "/process-next",
+    response_model=JobResponse | dict,
+    summary="Process Next Queued Job",
+    description="""
+Process the next queued job synchronously.
+
+This endpoint is designed for serverless environments (Vercel) where cron jobs
+trigger processing. It picks up the oldest queued job and executes it.
+
+**Returns:**
+- Job result if a job was processed
+- `{"status": "idle", "message": "No queued jobs"}` if queue is empty
+    """,
+)
+async def process_next_job(
+    user: User = Depends(get_current_user),
+) -> JobResponse | dict:
+    """Process the next queued job synchronously."""
+    import uuid
+    from datetime import datetime, timezone
+    from sqlalchemy import select, create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from evidence_repository.config import get_settings
+    from evidence_repository.models.job import Job, JobStatus as DBJobStatus
+    from evidence_repository.queue.tasks import task_process_document_version
+
+    settings = get_settings()
+
+    # Create sync database session
+    sync_url = settings.database_url.replace("+asyncpg", "+psycopg")
+    sync_url = sync_url.replace("ssl=require", "sslmode=require")
+    engine = create_engine(sync_url)
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+
+    try:
+        # Find oldest queued job
+        job = db.execute(
+            select(Job)
+            .where(Job.status == DBJobStatus.QUEUED)
+            .order_by(Job.priority.desc(), Job.created_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        if not job:
+            return {"status": "idle", "message": "No queued jobs"}
+
+        # Update status to RUNNING
+        job.status = DBJobStatus.RUNNING
+        job.started_at = datetime.now(timezone.utc)
+        job.worker_id = "serverless-cron"
+        job.attempts += 1
+        job.progress = 0
+        job.progress_message = "Starting cron execution"
+        db.commit()
+
+        # Execute the job based on type
+        try:
+            payload = job.payload or {}
+
+            if job.type.value == "process_document_version":
+                result = task_process_document_version(
+                    version_id=payload.get("version_id"),
+                    profile_code=payload.get("profile_code", "general"),
+                    extraction_level=payload.get("extraction_level", 2),
+                    reprocess=payload.get("reprocess", False),
+                )
+            else:
+                raise ValueError(f"Synchronous execution not supported for job type: {job.type.value}")
+
+            # Update status to SUCCEEDED
+            job.status = DBJobStatus.SUCCEEDED
+            job.finished_at = datetime.now(timezone.utc)
+            job.progress = 100
+            job.progress_message = "Job completed successfully"
+            job.result = result
+            job.error = None
+            db.commit()
+
+        except Exception as e:
+            # Update status to FAILED
+            job.status = DBJobStatus.FAILED
+            job.finished_at = datetime.now(timezone.utc)
+            job.error = str(e)
+            job.progress_message = f"Failed: {str(e)[:200]}"
+            db.commit()
+
+        return JobResponse(
+            job_id=str(job.id),
+            job_type=job.type.value,
+            status=job.status.value,
+            created_at=job.created_at.isoformat() if job.created_at else None,
+            started_at=job.started_at.isoformat() if job.started_at else None,
+            ended_at=job.finished_at.isoformat() if job.finished_at else None,
+            result=job.result,
+            error=job.error,
+            progress=job.progress,
+            progress_message=job.progress_message,
+            metadata={"payload": job.payload},
+        )
+
+    finally:
+        db.close()
+
+
 # =============================================================================
 # Async Document Upload
 # =============================================================================

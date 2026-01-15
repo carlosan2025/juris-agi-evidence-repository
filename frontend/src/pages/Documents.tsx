@@ -190,7 +190,7 @@ export function Documents() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = doc.filename;
+      a.download = doc.original_filename;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -279,7 +279,7 @@ export function Documents() {
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <FileText className="h-4 w-4 text-gray-400" />
-                        <span className="font-medium">{doc.filename}</span>
+                        <span className="font-medium">{doc.original_filename}</span>
                       </div>
                     </TableCell>
                     <TableCell>
@@ -495,7 +495,7 @@ export function Documents() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium text-gray-500">Filename</label>
-                <p className="text-gray-900">{selectedDoc.filename}</p>
+                <p className="text-gray-900">{selectedDoc.original_filename}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Industry Profile</label>
@@ -548,7 +548,7 @@ export function Documents() {
           <div className="space-y-4">
             <div className="flex items-center gap-2 pb-4 border-b border-gray-200">
               <FileText className="h-5 w-5 text-gray-400" />
-              <span className="font-medium text-gray-900">{projectModalDoc.filename}</span>
+              <span className="font-medium text-gray-900">{projectModalDoc.original_filename}</span>
             </div>
 
             {!projectsData?.items?.length ? (

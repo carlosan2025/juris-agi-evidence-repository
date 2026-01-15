@@ -105,4 +105,53 @@ export const documentsApi = {
       : `/documents/${id}/download`;
     return apiClient.download(url);
   },
+
+  getStats: (id: string) =>
+    apiClient.get<DocumentStats>(`/documents/${id}/stats`),
+
+  getSpans: (id: string, params?: { limit?: number; offset?: number }) =>
+    apiClient.get<SpanListResponse>(`/documents/${id}/spans`, params),
 };
+
+// Document statistics response type
+export interface DocumentStats {
+  document_id: string;
+  version_id: string;
+  filename: string;
+  extraction_status: string | null;
+  extracted_at: string | null;
+  text_length: number;
+  page_count: number | null;
+  spans: {
+    total: number;
+    by_type: Record<string, number>;
+  };
+  embeddings: {
+    total: number;
+    model: string;
+    dimensions: number;
+    chunk_size: number;
+    chunk_overlap: number;
+  };
+  metadata: Record<string, unknown>;
+  version_metadata: Record<string, unknown>;
+}
+
+// Span list response type
+export interface SpanListResponse {
+  items: SpanItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SpanItem {
+  id: string;
+  span_type: string;
+  text_content: string;
+  text_length: number;
+  start_locator: Record<string, unknown>;
+  end_locator: Record<string, unknown> | null;
+  metadata: Record<string, unknown>;
+  created_at: string | null;
+}

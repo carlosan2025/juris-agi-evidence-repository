@@ -1,5 +1,6 @@
 export { Dashboard } from './Dashboard';
 export { Documents } from './Documents';
+export { DocumentDetail } from './DocumentDetail';
 export { Projects } from './Projects';
 export { Jobs } from './Jobs';
 export { Settings } from './Settings';

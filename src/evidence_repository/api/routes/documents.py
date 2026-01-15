@@ -1040,3 +1040,163 @@ async def confirm_presigned_upload(
         job_id=None,  # No longer using job queue for immediate processing
         message=f"Upload confirmed. Document '{document.original_filename}' queued for processing.",
     )
+
+
+@router.get(
+    "/{document_id}/stats",
+    summary="Get Document Statistics",
+    description="""
+Get statistics about a document's processing including:
+- Number of spans (text chunks) created
+- Number of embeddings generated
+- Embedding dimensions and configuration
+- Extracted metadata
+    """,
+)
+async def get_document_stats(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Get document processing statistics."""
+    from sqlalchemy import func
+    from evidence_repository.models.evidence import Span
+    from evidence_repository.models.embedding import EmbeddingChunk
+
+    # Get document with latest version
+    result = await db.execute(
+        select(Document)
+        .options(selectinload(Document.versions))
+        .where(Document.id == document_id, Document.deleted_at.is_(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    # Get latest version
+    version = document.versions[0] if document.versions else None
+    if not version:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} has no versions",
+        )
+
+    # Count spans for this version
+    spans_result = await db.execute(
+        select(func.count(Span.id)).where(Span.document_version_id == version.id)
+    )
+    spans_count = spans_result.scalar() or 0
+
+    # Count embeddings for this version
+    embeddings_result = await db.execute(
+        select(func.count(EmbeddingChunk.id)).where(EmbeddingChunk.document_version_id == version.id)
+    )
+    embeddings_count = embeddings_result.scalar() or 0
+
+    # Get span types breakdown
+    span_types_result = await db.execute(
+        select(Span.span_type, func.count(Span.id))
+        .where(Span.document_version_id == version.id)
+        .group_by(Span.span_type)
+    )
+    span_types = {str(row[0].value): row[1] for row in span_types_result.fetchall()}
+
+    # Get embedding model info from settings
+    settings = get_settings()
+
+    return {
+        "document_id": str(document.id),
+        "version_id": str(version.id),
+        "filename": document.original_filename,
+        "extraction_status": version.extraction_status.value if version.extraction_status else None,
+        "extracted_at": version.extracted_at.isoformat() if version.extracted_at else None,
+        "text_length": len(version.extracted_text or ""),
+        "page_count": version.page_count,
+        "spans": {
+            "total": spans_count,
+            "by_type": span_types,
+        },
+        "embeddings": {
+            "total": embeddings_count,
+            "model": settings.openai_embedding_model,
+            "dimensions": 1536,  # text-embedding-3-small default
+            "chunk_size": 512,
+            "chunk_overlap": 50,
+        },
+        "metadata": document.metadata_ or {},
+        "version_metadata": version.metadata_ or {},
+    }
+
+
+@router.get(
+    "/{document_id}/spans",
+    summary="List Document Spans",
+    description="List all spans (text chunks) extracted from a document.",
+)
+async def list_document_spans(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """List spans for a document."""
+    from evidence_repository.models.evidence import Span
+
+    # Get document with latest version
+    result = await db.execute(
+        select(Document)
+        .options(selectinload(Document.versions))
+        .where(Document.id == document_id, Document.deleted_at.is_(None))
+    )
+    document = result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    version = document.versions[0] if document.versions else None
+    if not version:
+        return {"items": [], "total": 0}
+
+    # Get spans
+    spans_result = await db.execute(
+        select(Span)
+        .where(Span.document_version_id == version.id)
+        .order_by(Span.created_at)
+        .offset(offset)
+        .limit(limit)
+    )
+    spans = spans_result.scalars().all()
+
+    # Get total count
+    from sqlalchemy import func
+    count_result = await db.execute(
+        select(func.count(Span.id)).where(Span.document_version_id == version.id)
+    )
+    total = count_result.scalar() or 0
+
+    return {
+        "items": [
+            {
+                "id": str(span.id),
+                "span_type": span.span_type.value,
+                "text_content": span.text_content[:500] + "..." if len(span.text_content) > 500 else span.text_content,
+                "text_length": len(span.text_content),
+                "start_locator": span.start_locator,
+                "end_locator": span.end_locator,
+                "metadata": span.metadata_,
+                "created_at": span.created_at.isoformat() if span.created_at else None,
+            }
+            for span in spans
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }

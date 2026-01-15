@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/Layout';
-import { Dashboard, Documents, Projects, Jobs, Settings, Search, Prompts } from './pages';
+import { Dashboard, Documents, DocumentDetail, Projects, Jobs, Settings, Search, Prompts } from './pages';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,6 +20,7 @@ function App() {
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="documents" element={<Documents />} />
+            <Route path="documents/:documentId" element={<DocumentDetail />} />
             <Route path="projects" element={<Projects />} />
             <Route path="search" element={<Search />} />
             <Route path="jobs" element={<Jobs />} />

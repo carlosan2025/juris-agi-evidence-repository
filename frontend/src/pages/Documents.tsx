@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Upload, FileText, Trash2, Download, RefreshCw, Eye, FolderPlus } from 'lucide-react';
 import { format } from 'date-fns';
@@ -23,6 +24,7 @@ const MAX_FILE_SIZE_MB = 100;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 export function Documents() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -200,21 +202,18 @@ export function Documents() {
     }
   };
 
-  // Processing status labels map to user-friendly names
-  const PROCESSING_STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'warning' | 'info' | 'success' | 'danger' }> = {
+  // Extraction status labels - these map to actual digestion pipeline status
+  const EXTRACTION_STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'warning' | 'info' | 'success' | 'danger' }> = {
     pending: { label: 'Pending', variant: 'default' },
-    uploaded: { label: 'Uploaded', variant: 'info' },
-    extracted: { label: 'Text Extracted', variant: 'info' },
-    spans_built: { label: 'Spans Built', variant: 'info' },
-    embedded: { label: 'Embedded', variant: 'info' },
-    facts_extracted: { label: 'Facts Extracted', variant: 'info' },
-    quality_checked: { label: 'Complete', variant: 'success' },
+    processing: { label: 'Processing', variant: 'warning' },
+    completed: { label: 'Complete', variant: 'success' },
     failed: { label: 'Failed', variant: 'danger' },
   };
 
   const getProcessingStatusBadge = (
     uploadStatus: string | undefined,
-    processingStatus: string | null | undefined
+    _processingStatus: string | null | undefined, // Keep for backwards compatibility
+    extractionStatus?: string | null
   ) => {
     // If upload is pending or failed, show that status first (file not in storage)
     if (uploadStatus === 'pending') {
@@ -224,9 +223,9 @@ export function Documents() {
       return <Badge variant="danger">Upload Failed</Badge>;
     }
 
-    // Show processing pipeline status
-    const status = processingStatus || 'pending';
-    const statusInfo = PROCESSING_STATUS_LABELS[status] || PROCESSING_STATUS_LABELS.pending;
+    // Use extraction_status as the primary indicator (this is what the pipeline actually updates)
+    const status = extractionStatus || 'pending';
+    const statusInfo = EXTRACTION_STATUS_LABELS[status] || EXTRACTION_STATUS_LABELS.pending;
     return <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>;
   };
 
@@ -294,7 +293,10 @@ export function Documents() {
                 {data?.items.map((doc) => (
                   <TableRow key={doc.id}>
                     <TableCell>
-                      <div className="flex items-center gap-2">
+                      <div
+                        className="flex items-center gap-2 cursor-pointer hover:text-blue-600 transition-colors"
+                        onClick={() => navigate(`/documents/${doc.id}`)}
+                      >
                         <FileText className="h-4 w-4 text-gray-400" />
                         <span className="font-medium">{doc.original_filename}</span>
                       </div>
@@ -306,7 +308,7 @@ export function Documents() {
                       <span className="text-gray-500">{doc.content_type}</span>
                     </TableCell>
                     <TableCell>{doc.latest_version ? formatFileSize(doc.latest_version.file_size) : '-'}</TableCell>
-                    <TableCell>{getProcessingStatusBadge(doc.latest_version?.upload_status, doc.latest_version?.processing_status)}</TableCell>
+                    <TableCell>{getProcessingStatusBadge(doc.latest_version?.upload_status, doc.latest_version?.processing_status, doc.latest_version?.extraction_status)}</TableCell>
                     <TableCell>
                       {format(new Date(doc.created_at), 'MMM d, yyyy')}
                     </TableCell>
@@ -315,7 +317,7 @@ export function Documents() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => setSelectedDoc(doc)}
+                          onClick={() => navigate(`/documents/${doc.id}`)}
                           title="View details"
                         >
                           <Eye className="h-4 w-4" />
@@ -528,7 +530,7 @@ export function Documents() {
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Status</label>
-                <p>{getProcessingStatusBadge(selectedDoc.latest_version?.upload_status, selectedDoc.latest_version?.processing_status)}</p>
+                <p>{getProcessingStatusBadge(selectedDoc.latest_version?.upload_status, selectedDoc.latest_version?.processing_status, selectedDoc.latest_version?.extraction_status)}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Created</label>

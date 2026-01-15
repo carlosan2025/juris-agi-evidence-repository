@@ -851,11 +851,11 @@ async def get_presigned_upload_url(
     )
     db.add(document)
 
-    # Generate storage path
+    # Generate storage path (format: documents/{doc_id}/v{version}/filename)
     path_key = storage.generate_path_key(
         document_id=str(document_id),
-        version_id=str(version_id),
-        extension=extension,
+        version_number=1,  # First version
+        filename=body.filename,
     )
 
     # Create version record (pending upload)

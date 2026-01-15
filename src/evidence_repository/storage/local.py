@@ -445,21 +445,29 @@ class LocalFilesystemStorage(StorageBackend):
     def generate_path_key(
         self,
         document_id: str,
-        version_id: str,
-        extension: str,
+        version_number: int,
+        filename: str,
     ) -> str:
         """Generate a storage path key for a document version.
 
+        Path format: documents/{document_id}/v{version_number}/{filename}
+
         Args:
-            document_id: Document UUID.
-            version_id: Version identifier (e.g., "v1" or UUID).
-            extension: File extension (e.g., "pdf", "txt").
+            document_id: Document UUID string.
+            version_number: Version number (1, 2, 3...).
+            filename: Original filename.
 
         Returns:
-            Path key (e.g., "{doc_id}/{version_id}/original.pdf").
+            Storage path key.
         """
-        ext = extension.lstrip(".")
-        return f"{document_id}/{version_id}/original.{ext}"
+        # Sanitize filename
+        safe_filename = "".join(
+            c for c in filename if c.isalnum() or c in "._-"
+        ).strip()
+        if not safe_filename:
+            safe_filename = "document"
+
+        return f"documents/{document_id}/v{version_number}/{safe_filename}"
 
     def get_storage_root(self) -> str:
         """Get the storage root directory path."""

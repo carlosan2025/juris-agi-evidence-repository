@@ -213,10 +213,11 @@ class DocumentVersion(Base, UUIDMixin):
     )
 
     # Overall processing status (tracks progress through full pipeline)
-    processing_status: Mapped[ProcessingStatus] = mapped_column(
+    # NOTE: nullable=True for backwards compatibility until migration runs
+    processing_status: Mapped[ProcessingStatus | None] = mapped_column(
         Enum(ProcessingStatus, values_callable=lambda x: [e.value for e in x]),
         default=ProcessingStatus.PENDING,
-        nullable=False,
+        nullable=True,
     )
 
     # Extracted text content

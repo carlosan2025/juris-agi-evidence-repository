@@ -171,6 +171,14 @@ export function Documents() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
     },
+    onError: (error: Error) => {
+      // Don't show error for "already being deleted" - just refresh the list
+      if (error.message?.includes('already being deleted')) {
+        queryClient.invalidateQueries({ queryKey: ['documents'] });
+      } else {
+        console.error('Delete failed:', error);
+      }
+    },
   });
 
   const retryMutation = useMutation({
@@ -383,6 +391,12 @@ export function Documents() {
     return (doc as any).deletion_status === 'failed';
   };
 
+  // Check if deletion is in progress (can't delete again)
+  const isDeletionInProgress = (doc: Document) => {
+    const status = (doc as any).deletion_status;
+    return status === 'marked' || status === 'deleting';
+  };
+
   return (
     <div
       className="min-h-[calc(100vh-8rem)] relative"
@@ -505,18 +519,20 @@ export function Documents() {
                   >
                     <Download className="h-4 w-4" />
                   </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm('Delete this document?')) {
-                        deleteMutation.mutate(doc.id);
-                      }
-                    }}
-                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  {!isDeletionInProgress(doc) && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm('Delete this document?')) {
+                          deleteMutation.mutate(doc.id);
+                        }
+                      }}
+                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             ))

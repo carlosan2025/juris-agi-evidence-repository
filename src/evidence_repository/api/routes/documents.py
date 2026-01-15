@@ -673,8 +673,8 @@ async def delete_document(
     # Delete files from storage for each version
     for version in document.versions:
         try:
-            # Construct full file URI from storage path
-            file_uri = f"s3://{storage.bucket_name}/{version.storage_path}"
+            # Convert storage path key to full URI using storage backend's method
+            file_uri = storage._key_to_uri(version.storage_path)
             await storage.delete(file_uri)
         except Exception as e:
             # Log but continue - file might already be deleted or upload never completed

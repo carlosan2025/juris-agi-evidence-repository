@@ -81,6 +81,50 @@ async def _update_job_for_version(
 logger = logging.getLogger(__name__)
 
 
+async def _download_with_retry(storage, storage_path: str, max_retries: int = 5) -> bytes:
+    """Download file from storage with retry for R2 eventual consistency.
+
+    Large files may not be immediately available after upload confirmation
+    due to eventual consistency in R2/S3. This function retries with
+    exponential backoff.
+
+    Args:
+        storage: Storage backend instance
+        storage_path: Path/key in storage
+        max_retries: Maximum number of retry attempts
+
+    Returns:
+        File contents as bytes
+
+    Raises:
+        Exception: If file not found after all retries
+    """
+    import asyncio
+    retry_delays = [1, 2, 4, 8, 16]  # Exponential backoff in seconds
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            return await storage.download(storage_path)
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            # Check if it's a "not found" error (R2 eventual consistency)
+            if "nosuchkey" in error_str or "not found" in error_str or "does not exist" in error_str:
+                if attempt < max_retries - 1:
+                    delay = retry_delays[min(attempt, len(retry_delays) - 1)]
+                    logger.warning(
+                        f"File not yet available in storage (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {delay}s: {storage_path}"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+            # For other errors, fail immediately
+            raise
+
+    raise last_error or Exception(f"Failed to download file after {max_retries} attempts: {storage_path}")
+
+
 @router.get(
     "/status",
     summary="Get Worker Status",
@@ -289,8 +333,8 @@ async def digest_version(
 
             pipeline = DigestionPipeline(db=session)
 
-            # Download and process
-            file_data = await pipeline.storage.download(ver.storage_path)
+            # Download with retry for R2 eventual consistency
+            file_data = await _download_with_retry(pipeline.storage, ver.storage_path)
 
             result = DigestResult(
                 document_id=doc.id,
@@ -408,7 +452,8 @@ async def cron_process_pending(
             version.extraction_status = ExtractionStatus.PROCESSING
             await db.commit()
 
-            file_data = await pipeline.storage.download(version.storage_path)
+            # Download with retry for R2 eventual consistency
+            file_data = await _download_with_retry(pipeline.storage, version.storage_path)
 
             digest_result = DigestResult(
                 document_id=document.id,
@@ -530,8 +575,8 @@ async def process_pending_sync(
             await _update_job_for_version(db, version_id, JobStatus.RUNNING)
             await db.commit()
 
-            # Download file from storage
-            file_data = await pipeline.storage.download(version.storage_path)
+            # Download with retry for R2 eventual consistency
+            file_data = await _download_with_retry(pipeline.storage, version.storage_path)
 
             # Run digestion pipeline with status updates
             digest_result = DigestResult(
@@ -725,8 +770,8 @@ async def process_version_sync(
 
         pipeline = DigestionPipeline(db=db)
 
-        # Download file from storage
-        file_data = await pipeline.storage.download(version.storage_path)
+        # Download file from storage with retry for R2 eventual consistency
+        file_data = await _download_with_retry(pipeline.storage, version.storage_path)
 
         # Run digestion pipeline with status updates
         digest_result = DigestResult(

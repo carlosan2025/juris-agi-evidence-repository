@@ -29,8 +29,54 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from evidence_repository.api.dependencies import get_current_user, User
 from evidence_repository.db.session import get_db_session
 from evidence_repository.models.document import DocumentVersion, ExtractionStatus
+from evidence_repository.models.job import Job, JobStatus
 
 router = APIRouter(tags=["Worker"])
+
+
+async def _update_job_for_version(
+    db: AsyncSession,
+    version_id: str,
+    job_status: JobStatus,
+    result: dict | None = None,
+    error: str | None = None,
+) -> None:
+    """Find and update job associated with a version_id."""
+    try:
+        # Find job with matching version_id in payload
+        # Jobs have payload like {"version_id": "uuid-string", ...}
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import JSONB
+
+        # Query jobs where payload->version_id matches
+        jobs_result = await db.execute(
+            select(Job).where(
+                Job.payload["version_id"].astext == version_id,
+                Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            )
+        )
+        job = jobs_result.scalar_one_or_none()
+
+        if job:
+            job.status = job_status
+            if job_status == JobStatus.RUNNING:
+                job.started_at = datetime.utcnow()
+                job.progress = 10
+                job.progress_message = "Processing document"
+            elif job_status == JobStatus.SUCCEEDED:
+                job.finished_at = datetime.utcnow()
+                job.progress = 100
+                job.progress_message = "Completed"
+                if result:
+                    job.result = result
+            elif job_status == JobStatus.FAILED:
+                job.finished_at = datetime.utcnow()
+                job.progress_message = f"Failed: {error[:100] if error else 'Unknown error'}"
+                job.error = error
+            await db.flush()
+            logger.debug(f"Updated job {job.id} to status {job_status.value}")
+    except Exception as e:
+        logger.warning(f"Could not update job for version {version_id}: {e}")
 logger = logging.getLogger(__name__)
 
 
@@ -472,8 +518,9 @@ async def process_pending_sync(
 
             logger.info(f"Processing version {version_id} ({document.filename})")
 
-            # Mark as processing
+            # Mark as processing (both version and job)
             version.extraction_status = ExtractionStatus.PROCESSING
+            await _update_job_for_version(db, version_id, JobStatus.RUNNING)
             await db.commit()
 
             # Download file from storage
@@ -490,9 +537,16 @@ async def process_pending_sync(
             await pipeline._step_build_sections(version, digest_result)
             await pipeline._step_generate_embeddings(version, digest_result)
 
-            # Mark as completed
+            # Mark as completed (both version and job)
             version.extraction_status = ExtractionStatus.COMPLETED
             digest_result.completed_at = datetime.utcnow()
+
+            job_result = {
+                "sections_created": digest_result.section_count,
+                "embeddings_created": digest_result.embedding_count,
+                "text_length": digest_result.text_length,
+            }
+            await _update_job_for_version(db, version_id, JobStatus.SUCCEEDED, result=job_result)
             await db.commit()
 
             processed += 1
@@ -511,10 +565,11 @@ async def process_pending_sync(
             logger.error(f"Failed to process version {version_id}: {e}")
             failed += 1
 
-            # Mark as failed
+            # Mark as failed (both version and job)
             try:
                 version.extraction_status = ExtractionStatus.FAILED
                 version.extraction_error = str(e)[:500]
+                await _update_job_for_version(db, version_id, JobStatus.FAILED, error=str(e)[:500])
                 await db.commit()
             except Exception:
                 await db.rollback()

@@ -88,8 +88,9 @@ class Settings(BaseSettings):
     # Supported file types
     supported_extensions: list[str] = Field(
         default_factory=lambda: [
-            ".pdf", ".txt", ".md", ".csv", ".xlsx",
-            ".png", ".jpg", ".jpeg", ".webp"
+            ".pdf", ".txt", ".md", ".csv", ".xlsx", ".xls",
+            ".docx", ".pptx",  # Microsoft Office
+            ".png", ".jpg", ".jpeg", ".webp", ".html"
         ]
     )
 

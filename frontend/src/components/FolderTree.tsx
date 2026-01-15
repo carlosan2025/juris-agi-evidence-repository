@@ -9,7 +9,6 @@ import {
   Pencil,
   Trash2,
   FileText,
-  MoreHorizontal,
 } from 'lucide-react';
 import { foldersApi } from '../api/folders';
 import { Button } from './ui/Button';

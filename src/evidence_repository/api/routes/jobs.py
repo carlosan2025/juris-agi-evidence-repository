@@ -192,6 +192,26 @@ async def list_jobs(
 @router.delete(
     "/{job_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete Job",
+    description="Delete a job. Can delete queued, succeeded, failed, or canceled jobs. Cannot delete running jobs.",
+)
+async def delete_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+) -> None:
+    """Delete a job from the database."""
+    job_queue = get_job_queue()
+
+    if not job_queue.delete_job(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job not found or cannot be deleted (may be currently running)",
+        )
+
+
+@router.post(
+    "/{job_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
     summary="Cancel Job",
     description="Cancel a queued job (cannot cancel running jobs).",
 )
@@ -207,6 +227,36 @@ async def cancel_job(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Job not found or cannot be canceled (may already be running)",
         )
+
+
+@router.delete(
+    "/cleanup/stale",
+    summary="Delete Stale Jobs",
+    description="Delete stale queued/running jobs older than specified hours.",
+)
+async def delete_stale_jobs(
+    max_age_hours: int = Query(24, ge=1, le=168, description="Max age in hours for stale jobs"),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Delete stale jobs that are stuck in queued/running state."""
+    job_queue = get_job_queue()
+    deleted = job_queue.delete_stale_jobs(max_age_hours)
+    return {"deleted": deleted, "message": f"Deleted {deleted} stale jobs"}
+
+
+@router.delete(
+    "/cleanup/old",
+    summary="Delete Old Completed Jobs",
+    description="Delete old completed jobs to clean up the database.",
+)
+async def delete_old_jobs(
+    max_age_days: int = Query(7, ge=1, le=90, description="Max age in days for completed jobs"),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Delete old completed jobs."""
+    job_queue = get_job_queue()
+    deleted = job_queue.cleanup_completed_jobs(max_age_days)
+    return {"deleted": deleted, "message": f"Deleted {deleted} old completed jobs"}
 
 
 @router.post(

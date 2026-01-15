@@ -8,6 +8,7 @@ import {
   XCircle,
   RefreshCw,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 import {
@@ -77,6 +78,20 @@ export function Jobs() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => jobsApi.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+
+  const cleanupStaleMutation = useMutation({
+    mutationFn: () => jobsApi.cleanupStale(24),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] });
+    },
+  });
+
   const getStatusIcon = (status: JobStatus) => {
     switch (status) {
       case 'succeeded':
@@ -130,10 +145,20 @@ export function Jobs() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Jobs</h1>
-        <Button variant="secondary" onClick={() => refetch()}>
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => cleanupStaleMutation.mutate()}
+            disabled={cleanupStaleMutation.isPending}
+          >
+            <Trash2 className="h-4 w-4" />
+            Clean Stale
+          </Button>
+          <Button variant="secondary" onClick={() => refetch()}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -223,7 +248,7 @@ export function Jobs() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
-                        {(job.status === 'queued' || job.status === 'running') && (
+                        {(job.status === 'queued') && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -231,6 +256,7 @@ export function Jobs() {
                               e.stopPropagation();
                               cancelMutation.mutate(job.job_id);
                             }}
+                            title="Cancel job"
                           >
                             <XCircle className="h-4 w-4 text-red-500" />
                           </Button>
@@ -243,8 +269,22 @@ export function Jobs() {
                               e.stopPropagation();
                               retryMutation.mutate(job.job_id);
                             }}
+                            title="Retry job"
                           >
                             <RotateCcw className="h-4 w-4 text-blue-500" />
+                          </Button>
+                        )}
+                        {job.status !== 'running' && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteMutation.mutate(job.job_id);
+                            }}
+                            title="Delete job"
+                          >
+                            <Trash2 className="h-4 w-4 text-gray-400 hover:text-red-500" />
                           </Button>
                         )}
                       </div>

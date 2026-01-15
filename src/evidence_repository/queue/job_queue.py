@@ -419,6 +419,131 @@ class JobQueue:
         finally:
             db.close()
 
+    def delete_job(self, job_id: str) -> bool:
+        """Delete a job from the database.
+
+        Can delete jobs in any terminal state (succeeded, failed, canceled)
+        or queued jobs. Cannot delete running jobs.
+
+        Args:
+            job_id: Job ID.
+
+        Returns:
+            True if deleted, False otherwise.
+        """
+        db = self._get_db_session()
+        try:
+            job_uuid = uuid.UUID(job_id)
+            job = db.execute(
+                select(Job).where(Job.id == job_uuid)
+            ).scalar_one_or_none()
+
+            if not job:
+                return False
+
+            # Cannot delete running jobs
+            if job.status == JobStatus.RUNNING:
+                return False
+
+            db.delete(job)
+            db.commit()
+
+            logger.info(f"Deleted job {job_id}")
+            return True
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to delete job: {e}")
+            return False
+        finally:
+            db.close()
+
+    def delete_stale_jobs(self, max_age_hours: int = 24) -> int:
+        """Delete stale jobs that are no longer relevant.
+
+        Deletes jobs that:
+        - Are in QUEUED status but older than max_age_hours
+        - Are in RUNNING status but older than max_age_hours (likely orphaned)
+
+        Args:
+            max_age_hours: Maximum age in hours for queued/running jobs.
+
+        Returns:
+            Number of deleted jobs.
+        """
+        from datetime import timedelta
+
+        db = self._get_db_session()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+            # Find stale jobs
+            stale_jobs = db.execute(
+                select(Job).where(
+                    Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+                    Job.created_at < cutoff,
+                )
+            ).scalars().all()
+
+            deleted_count = 0
+            for job in stale_jobs:
+                db.delete(job)
+                deleted_count += 1
+
+            db.commit()
+            logger.info(f"Deleted {deleted_count} stale jobs")
+            return deleted_count
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to delete stale jobs: {e}")
+            return 0
+        finally:
+            db.close()
+
+    def cleanup_completed_jobs(self, max_age_days: int = 7) -> int:
+        """Delete old completed jobs to keep the database clean.
+
+        Deletes jobs that:
+        - Are in terminal state (succeeded, failed, canceled)
+        - Were finished more than max_age_days ago
+
+        Args:
+            max_age_days: Maximum age in days for completed jobs.
+
+        Returns:
+            Number of deleted jobs.
+        """
+        from datetime import timedelta
+
+        db = self._get_db_session()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+            # Find old completed jobs
+            old_jobs = db.execute(
+                select(Job).where(
+                    Job.status.in_([JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELED]),
+                    Job.finished_at < cutoff,
+                )
+            ).scalars().all()
+
+            deleted_count = 0
+            for job in old_jobs:
+                db.delete(job)
+                deleted_count += 1
+
+            db.commit()
+            logger.info(f"Deleted {deleted_count} old completed jobs")
+            return deleted_count
+
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to cleanup completed jobs: {e}")
+            return 0
+        finally:
+            db.close()
+
     def list_jobs(
         self,
         job_type: JobType | str | None = None,

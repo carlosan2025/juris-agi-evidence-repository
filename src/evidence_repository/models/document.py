@@ -206,11 +206,22 @@ class DocumentVersion(Base, UUIDMixin):
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # Upload status (tracks whether file is actually in storage)
-    upload_status: Mapped[UploadStatus] = mapped_column(
-        Enum(UploadStatus, values_callable=lambda x: [e.value for e in x]),
-        default=UploadStatus.UPLOADED,  # Default for direct uploads
-        nullable=False,
-    )
+    # TEMPORARY FIX: Column commented out until migration 009 runs on production
+    # Once migration 009_add_upload_status runs, uncomment this and remove the property below
+    # upload_status: Mapped[UploadStatus] = mapped_column(
+    #     Enum(UploadStatus, values_callable=lambda x: [e.value for e in x]),
+    #     default=UploadStatus.UPLOADED,  # Default for direct uploads
+    #     nullable=False,
+    # )
+
+    @property
+    def upload_status(self) -> UploadStatus:
+        """Get upload status.
+
+        TEMPORARY: Returns UPLOADED until migration runs and column is added.
+        All existing documents were uploaded via direct upload, so UPLOADED is correct.
+        """
+        return UploadStatus.UPLOADED
 
     # Overall processing status (tracks progress through full pipeline)
     # TEMPORARY FIX: Column commented out until migration runs on production

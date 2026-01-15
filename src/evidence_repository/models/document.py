@@ -18,6 +18,14 @@ if TYPE_CHECKING:
     from evidence_repository.models.project import ProjectDocument
 
 
+class UploadStatus(str, enum.Enum):
+    """Status of file upload to storage."""
+
+    PENDING = "pending"  # Presigned URL generated, awaiting upload
+    UPLOADED = "uploaded"  # File successfully uploaded to storage
+    FAILED = "failed"  # Upload failed or timed out
+
+
 class ExtractionStatus(str, enum.Enum):
     """Status of text extraction for a document version."""
 
@@ -25,6 +33,30 @@ class ExtractionStatus(str, enum.Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class ProcessingStatus(str, enum.Enum):
+    """Overall processing status tracking the full pipeline.
+
+    Pipeline stages in order:
+    1. UPLOADED - File is in storage
+    2. EXTRACTED - Text extraction complete
+    3. SPANS_BUILT - Evidence spans created
+    4. EMBEDDED - Vector embeddings generated
+    5. FACTS_EXTRACTED - Metrics/claims extracted via LLM
+    6. QUALITY_CHECKED - Conflict/quality analysis complete
+
+    FAILED indicates processing stopped due to an error.
+    """
+
+    PENDING = "pending"  # Awaiting processing (upload may be pending)
+    UPLOADED = "uploaded"  # File in storage, awaiting extraction
+    EXTRACTED = "extracted"  # Text extraction complete
+    SPANS_BUILT = "spans_built"  # Evidence spans created
+    EMBEDDED = "embedded"  # Vector embeddings generated
+    FACTS_EXTRACTED = "facts_extracted"  # Metrics/claims extracted
+    QUALITY_CHECKED = "quality_checked"  # Full pipeline complete
+    FAILED = "failed"  # Processing failed at some stage
 
 
 class DocumentType(str, enum.Enum):
@@ -172,6 +204,20 @@ class DocumentVersion(Base, UUIDMixin):
     # File metadata
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Upload status (tracks whether file is actually in storage)
+    upload_status: Mapped[UploadStatus] = mapped_column(
+        Enum(UploadStatus, values_callable=lambda x: [e.value for e in x]),
+        default=UploadStatus.UPLOADED,  # Default for direct uploads
+        nullable=False,
+    )
+
+    # Overall processing status (tracks progress through full pipeline)
+    processing_status: Mapped[ProcessingStatus] = mapped_column(
+        Enum(ProcessingStatus, values_callable=lambda x: [e.value for e in x]),
+        default=ProcessingStatus.PENDING,
+        nullable=False,
+    )
 
     # Extracted text content
     extracted_text: Mapped[str | None] = mapped_column(Text)

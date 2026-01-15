@@ -9,6 +9,8 @@ export interface PaginatedResponse<T> {
 
 // Document types
 export type ExtractionStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type UploadStatus = 'pending' | 'uploaded' | 'failed';
+export type ProcessingStatus = 'pending' | 'uploaded' | 'extracted' | 'spans_built' | 'embedded' | 'facts_extracted' | 'quality_checked' | 'failed';
 export type ProfileCode = 'general' | 'vc' | 'pharma' | 'insurance';
 
 export const PROFILE_OPTIONS: { value: ProfileCode; label: string; description: string }[] = [
@@ -24,6 +26,8 @@ export interface DocumentVersion {
   version_number: number;
   file_size: number;
   file_hash: string;
+  upload_status: UploadStatus;
+  processing_status: ProcessingStatus;
   extraction_status: ExtractionStatus;
   extraction_error: string | null;
   extracted_at: string | null;

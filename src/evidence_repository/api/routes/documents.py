@@ -14,7 +14,7 @@ from evidence_repository.db.session import get_db_session
 from evidence_repository.extraction.service import ExtractionService
 from evidence_repository.ingestion.service import IngestionService
 from evidence_repository.models.audit import AuditAction, AuditLog
-from evidence_repository.models.document import Document, DocumentVersion, ExtractionStatus
+from evidence_repository.models.document import Document, DocumentVersion, ExtractionStatus, ProcessingStatus, UploadStatus
 from evidence_repository.models.job import JobType
 from evidence_repository.queue.job_queue import get_job_queue
 from evidence_repository.schemas.common import PaginatedResponse
@@ -849,7 +849,7 @@ async def get_presigned_upload_url(
         extension=extension,
     )
 
-    # Create version record (pending)
+    # Create version record (pending upload)
     version = DocumentVersion(
         id=version_id,
         document_id=document_id,
@@ -857,6 +857,8 @@ async def get_presigned_upload_url(
         file_size=body.file_size,
         file_hash="pending",  # Will be updated after upload
         storage_path=path_key,
+        upload_status=UploadStatus.PENDING,  # Awaiting presigned upload
+        processing_status=ProcessingStatus.PENDING,  # Full pipeline pending
         extraction_status=ExtractionStatus.PENDING,
         metadata_={"pending_upload": True},
     )
@@ -957,9 +959,11 @@ async def confirm_presigned_upload(
         # Continue without metadata update
         pass
 
-    # Mark as no longer pending
+    # Mark as no longer pending and update upload/processing status
     document.metadata_["pending_upload"] = False
     version.metadata_["pending_upload"] = False
+    version.upload_status = UploadStatus.UPLOADED
+    version.processing_status = ProcessingStatus.UPLOADED
 
     # Write audit log
     await _write_audit_log(

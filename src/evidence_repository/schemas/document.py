@@ -25,6 +25,13 @@ class DocumentVersionResponse(BaseSchema):
     version_number: int = Field(..., description="Version number")
     file_size: int = Field(..., description="File size in bytes")
     file_hash: str = Field(..., description="SHA-256 hash of file content")
+    upload_status: str = Field(
+        default="uploaded", description="Upload status: pending, uploaded, or failed"
+    )
+    processing_status: str = Field(
+        default="pending",
+        description="Overall processing status: pending, uploaded, extracted, spans_built, embedded, facts_extracted, quality_checked, or failed"
+    )
     extraction_status: str = Field(..., description="Text extraction status")
     extraction_error: str | None = Field(
         default=None, description="Extraction error message if failed"

@@ -200,17 +200,34 @@ export function Documents() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return <Badge variant="success">Completed</Badge>;
-      case 'processing':
-        return <Badge variant="info">Processing</Badge>;
-      case 'failed':
-        return <Badge variant="danger">Failed</Badge>;
-      default:
-        return <Badge variant="default">Pending</Badge>;
+  // Processing status labels map to user-friendly names
+  const PROCESSING_STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'warning' | 'info' | 'success' | 'danger' }> = {
+    pending: { label: 'Pending', variant: 'default' },
+    uploaded: { label: 'Uploaded', variant: 'info' },
+    extracted: { label: 'Text Extracted', variant: 'info' },
+    spans_built: { label: 'Spans Built', variant: 'info' },
+    embedded: { label: 'Embedded', variant: 'info' },
+    facts_extracted: { label: 'Facts Extracted', variant: 'info' },
+    quality_checked: { label: 'Complete', variant: 'success' },
+    failed: { label: 'Failed', variant: 'danger' },
+  };
+
+  const getProcessingStatusBadge = (
+    uploadStatus: string | undefined,
+    processingStatus: string | undefined
+  ) => {
+    // If upload is pending or failed, show that status first (file not in storage)
+    if (uploadStatus === 'pending') {
+      return <Badge variant="warning">Upload Pending</Badge>;
     }
+    if (uploadStatus === 'failed') {
+      return <Badge variant="danger">Upload Failed</Badge>;
+    }
+
+    // Show processing pipeline status
+    const status = processingStatus || 'pending';
+    const statusInfo = PROCESSING_STATUS_LABELS[status] || PROCESSING_STATUS_LABELS.pending;
+    return <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>;
   };
 
   const getProfileBadge = (profileCode: string) => {
@@ -289,7 +306,7 @@ export function Documents() {
                       <span className="text-gray-500">{doc.content_type}</span>
                     </TableCell>
                     <TableCell>{doc.latest_version ? formatFileSize(doc.latest_version.file_size) : '-'}</TableCell>
-                    <TableCell>{getStatusBadge(doc.latest_version?.extraction_status || 'pending')}</TableCell>
+                    <TableCell>{getProcessingStatusBadge(doc.latest_version?.upload_status, doc.latest_version?.processing_status)}</TableCell>
                     <TableCell>
                       {format(new Date(doc.created_at), 'MMM d, yyyy')}
                     </TableCell>
@@ -511,7 +528,7 @@ export function Documents() {
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Status</label>
-                <p>{getStatusBadge(selectedDoc.latest_version?.extraction_status || 'pending')}</p>
+                <p>{getProcessingStatusBadge(selectedDoc.latest_version?.upload_status, selectedDoc.latest_version?.processing_status)}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Created</label>

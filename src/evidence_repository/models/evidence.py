@@ -62,7 +62,7 @@ class Span(Base, UUIDMixin):
 
     # Classification
     span_type: Mapped[SpanType] = mapped_column(
-        Enum(SpanType),
+        Enum(SpanType, name="spantype", create_type=False, values_callable=lambda x: [e.value for e in x]),
         default=SpanType.TEXT,
         nullable=False,
     )

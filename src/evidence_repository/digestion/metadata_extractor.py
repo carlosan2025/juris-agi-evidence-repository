@@ -96,14 +96,17 @@ async def extract_metadata(
 
     settings = get_settings()
     if not settings.openai_api_key:
-        logger.warning("OpenAI API key not configured, skipping LLM extraction")
+        logger.warning("OpenAI API key not configured (OPENAI_API_KEY env var), skipping LLM extraction")
         return metadata
+
+    logger.info(f"OpenAI API key found, attempting LLM metadata extraction for: {filename}")
 
     try:
         llm_metadata = await _extract_with_llm(text, filename)
         metadata.update(llm_metadata)
+        logger.info(f"LLM metadata extraction succeeded for: {filename}")
     except Exception as e:
-        logger.warning(f"LLM metadata extraction failed: {e}")
+        logger.error(f"LLM metadata extraction failed for {filename}: {e}", exc_info=True)
 
     return metadata
 

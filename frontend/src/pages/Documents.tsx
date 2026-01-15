@@ -214,7 +214,7 @@ export function Documents() {
 
   const getProcessingStatusBadge = (
     uploadStatus: string | undefined,
-    processingStatus: string | undefined
+    processingStatus: string | null | undefined
   ) => {
     // If upload is pending or failed, show that status first (file not in storage)
     if (uploadStatus === 'pending') {

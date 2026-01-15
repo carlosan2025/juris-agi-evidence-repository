@@ -1,8 +1,7 @@
 """Database polling worker for document processing.
 
-Inspired by Agent-K's digestion-worker.ts, this module provides a simple
-database-as-queue worker for processing documents without external queue
-dependencies.
+This module provides a simple database-as-queue worker for processing
+documents without external queue dependencies.
 
 Key features:
 - Polls database for PENDING documents

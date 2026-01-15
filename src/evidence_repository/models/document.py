@@ -60,7 +60,7 @@ class ProcessingStatus(str, enum.Enum):
 
 
 class DocumentType(str, enum.Enum):
-    """Document classification type (inspired by Agent-K)."""
+    """Document classification type ."""
 
     ACADEMIC_PAPER = "academic_paper"
     NEWS_ARTICLE = "news_article"
@@ -117,8 +117,7 @@ class Document(Base, UUIDMixin, TimestampMixin):
     # Industry profile for extraction (vc, pharma, insurance, general)
     profile_code: Mapped[str] = mapped_column(String(50), default="general", nullable=False)
 
-    # Document classification (Agent-K inspired)
-    document_type: Mapped[DocumentType | None] = mapped_column(
+    # Document classification     document_type: Mapped[DocumentType | None] = mapped_column(
         Enum(DocumentType, values_callable=lambda x: [e.value for e in x]),
         default=DocumentType.UNKNOWN,
     )
@@ -232,8 +231,7 @@ class DocumentVersion(Base, UUIDMixin):
     # Page/sheet count (for PDFs, spreadsheets)
     page_count: Mapped[int | None] = mapped_column()
 
-    # Truthfulness assessment (Agent-K inspired)
-    truthfulness_score: Mapped[float | None] = mapped_column(Float)
+    # Truthfulness assessment     truthfulness_score: Mapped[float | None] = mapped_column(Float)
     bias_score: Mapped[float | None] = mapped_column(Float)
     credibility_assessment: Mapped[dict | None] = mapped_column(JSON)
 

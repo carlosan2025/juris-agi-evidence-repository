@@ -1,7 +1,7 @@
 """Document digestion pipeline module.
 
-Inspired by Agent-K's digestion architecture, this module provides a unified
-pipeline for processing documents from upload through to searchable state.
+This module provides a unified pipeline for processing documents from
+upload through to searchable state.
 
 Key features:
 - Database-as-queue pattern for simple deployments

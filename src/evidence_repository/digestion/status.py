@@ -1,7 +1,6 @@
 """Processing status and monitoring utilities.
 
-Provides status queries and monitoring endpoints for the digestion pipeline,
-inspired by Agent-K's worker status patterns.
+Provides status queries and monitoring endpoints for the digestion pipeline.
 """
 
 import logging

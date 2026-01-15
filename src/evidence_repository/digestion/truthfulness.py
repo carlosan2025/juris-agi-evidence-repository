@@ -1,7 +1,6 @@
 """Truthfulness assessment for documents.
 
-Inspired by Agent-K's truthfulness evaluation, this module assesses
-document credibility and flags potential issues.
+This module assesses document credibility and flags potential issues.
 
 Assessment categories:
 - Source credibility

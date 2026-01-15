@@ -1,7 +1,6 @@
 """Worker status and management endpoints.
 
-Provides endpoints for monitoring and controlling document processing,
-inspired by Agent-K's worker API patterns.
+Provides endpoints for monitoring and controlling document processing.
 """
 
 import uuid
@@ -78,7 +77,7 @@ async def trigger_processing(
     """Trigger processing of pending documents.
 
     If chain=True, will continue processing until queue is empty
-    (self-triggering chain pattern from Agent-K).
+    (self-triggering chain pattern).
 
     Returns immediately while processing continues in background.
     """

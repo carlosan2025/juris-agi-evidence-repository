@@ -1,7 +1,7 @@
 """Document parsers module.
 
-Inspired by Agent-K's parser architecture, this module provides unified
-parsing for multiple document formats with graceful fallbacks.
+This module provides unified parsing for multiple document formats with
+graceful fallbacks.
 
 Supported formats:
 - PDF: pypdf with LovePDF fallback for scanned documents

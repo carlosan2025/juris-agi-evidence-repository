@@ -1,10 +1,9 @@
 """Unified document digestion pipeline.
 
-Inspired by Agent-K's digestion-pipeline.ts, this module provides a single
-entry point for processing documents from any trigger (API upload, worker,
-batch import, etc.).
+This module provides a single entry point for processing documents from any
+trigger (API upload, worker, batch import, etc.).
 
-Key patterns from Agent-K:
+Key patterns:
 1. Shared pipeline logic - same code path for all processing modes
 2. Database status transitions - PENDING → PROCESSING → READY/FAILED
 3. Content hash deduplication at upload time
@@ -619,7 +618,7 @@ async def digest_pending_documents(
 ) -> list[DigestResult]:
     """Process pending documents from database queue.
 
-    This function implements the database-as-queue pattern from Agent-K.
+    This function implements the database-as-queue pattern.
     It queries for documents with PENDING status and processes them.
 
     Args:

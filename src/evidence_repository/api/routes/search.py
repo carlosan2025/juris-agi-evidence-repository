@@ -101,7 +101,7 @@ Perform semantic search across all documents with optional keyword filtering.
 - `semantic` (default): Vector similarity search using embeddings
 - `keyword`: Full-text keyword search
 - `hybrid`: Combined semantic + keyword search with score fusion
-- `two_stage`: Metadata filter + semantic ranking (Agent-K pattern)
+- `two_stage`: Metadata filter + semantic ranking
 - `discovery`: Find documents with comprehensive topic coverage
 
 **Keyword Filtering:**
@@ -132,7 +132,7 @@ async def search_documents(
     Uses pgvector for efficient similarity search against document embeddings.
     Returns spans with citations only.
     """
-    # Use two-stage search for new Agent-K modes
+    # Use two-stage search for these modes
     if query.mode in (SearchMode.TWO_STAGE, SearchMode.DISCOVERY):
         return await _two_stage_search(query, db)
 
@@ -164,7 +164,7 @@ async def _two_stage_search(
     query: SearchQuery,
     db: AsyncSession,
 ) -> SearchResult:
-    """Execute two-stage or discovery search using Agent-K patterns."""
+    """Execute two-stage or discovery search."""
     from evidence_repository.services.two_stage_search import (
         TwoStageSearch,
         SearchMode as TSSearchMode,

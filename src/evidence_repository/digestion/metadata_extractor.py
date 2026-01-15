@@ -1,7 +1,6 @@
 """LLM-based metadata extraction.
 
-Inspired by Agent-K's extractMetadata function, this module uses LLM
-to extract structured metadata from document content.
+This module uses LLM to extract structured metadata from document content.
 
 Extracted fields:
 - title
@@ -26,7 +25,7 @@ from evidence_repository.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Document type classifications (from Agent-K)
+# Document type classifications
 DOCUMENT_TYPES = [
     "academic_paper",
     "news_article",

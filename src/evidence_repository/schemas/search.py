@@ -16,8 +16,8 @@ class SearchMode(str, Enum):
     SEMANTIC = "semantic"  # Vector similarity search only
     KEYWORD = "keyword"  # Full-text keyword search only
     HYBRID = "hybrid"  # Combined semantic + keyword search
-    TWO_STAGE = "two_stage"  # Metadata filter + semantic ranking (Agent-K)
-    DISCOVERY = "discovery"  # Find comprehensive document coverage (Agent-K)
+    TWO_STAGE = "two_stage"  # Metadata filter + semantic ranking
+    DISCOVERY = "discovery"  # Find comprehensive document coverage
 
 
 class SpanTypeFilter(str, Enum):
@@ -73,7 +73,7 @@ class SearchQuery(BaseModel):
         description="Only return results that have associated spans",
     )
 
-    # Agent-K two-stage search filters
+    # Two-stage search metadata filters
     sectors: list[str] | None = Field(
         default=None,
         description="Filter by industry sectors (for two_stage/discovery modes)",

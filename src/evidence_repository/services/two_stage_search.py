@@ -1,7 +1,7 @@
 """Two-stage search architecture.
 
-Inspired by Agent-K's search implementation, this module provides a
-two-stage search that combines fast metadata filtering with semantic search.
+This module provides a two-stage search that combines fast metadata
+filtering with semantic search.
 
 Stage 1: Fast Metadata Filter
   - PostgreSQL full-text search on document fields
@@ -491,8 +491,6 @@ class TwoStageSearch:
 
         Finds documents that comprehensively cover a topic, not just
         documents that mention keywords. Returns coverage scores.
-
-        Inspired by Agent-K's documentDiscoverySearch.
         """
         # First, do semantic search to find relevant chunks
         await self._semantic_search(query, filters, limit * 3, 0.4, response)

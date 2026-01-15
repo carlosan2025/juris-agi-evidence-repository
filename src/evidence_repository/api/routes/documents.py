@@ -673,9 +673,11 @@ async def delete_document(
     # Delete files from storage for each version
     for version in document.versions:
         try:
-            await storage.delete(version.storage_path)
+            # Construct full file URI from storage path
+            file_uri = f"s3://{storage.bucket_name}/{version.storage_path}"
+            await storage.delete(file_uri)
         except Exception as e:
-            # Log but continue - file might already be deleted
+            # Log but continue - file might already be deleted or upload never completed
             logging.warning(f"Failed to delete file {version.storage_path}: {e}")
 
     # Write audit log for deletion

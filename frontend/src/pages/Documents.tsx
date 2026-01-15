@@ -18,8 +18,8 @@ import { documentsApi, projectsApi } from '../api';
 import type { Document, ProfileCode, Project } from '../types';
 import { PROFILE_OPTIONS } from '../types';
 
-// Vercel serverless functions have a 4.5MB request body limit
-const MAX_FILE_SIZE_MB = 4;
+// Max file size - presigned uploads bypass Vercel's limit for larger files
+const MAX_FILE_SIZE_MB = 100;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 export function Documents() {

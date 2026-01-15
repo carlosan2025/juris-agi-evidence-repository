@@ -19,10 +19,14 @@ from evidence_repository.models.job import JobType
 from evidence_repository.queue.job_queue import get_job_queue
 from evidence_repository.schemas.common import PaginatedResponse
 from evidence_repository.schemas.document import (
+    ConfirmUploadRequest,
+    ConfirmUploadResponse,
     DocumentResponse,
     DocumentUploadResponse,
     DocumentVersionResponse,
     ExtractionTriggerResponse,
+    PresignedUploadRequest,
+    PresignedUploadResponse,
     VersionUploadResponse,
 )
 from evidence_repository.schemas.quality import QualityAnalysisResponse
@@ -750,3 +754,244 @@ async def analyze_document_quality(
     )
 
     return QualityAnalysisResponse.from_analysis_result(analysis_result)
+
+
+# =============================================================================
+# Presigned Upload Endpoints (for large files - bypasses Vercel 4.5MB limit)
+# =============================================================================
+
+
+@router.post(
+    "/presigned-upload",
+    response_model=PresignedUploadResponse,
+    summary="Get Presigned Upload URL",
+    description="""
+Get a presigned URL for direct upload to storage (Cloudflare R2).
+
+This bypasses the Vercel serverless 4.5MB payload limit, allowing uploads
+of any size directly to cloud storage.
+
+**Flow:**
+1. Call this endpoint with file metadata
+2. Upload the file directly to the returned `upload_url` using PUT
+3. Call `/documents/confirm-upload` to complete the process
+    """,
+)
+async def get_presigned_upload_url(
+    request: Request,
+    body: PresignedUploadRequest,
+    db: AsyncSession = Depends(get_db_session),
+    storage: StorageBackend = Depends(get_storage),
+    user: User = Depends(get_current_user),
+) -> PresignedUploadResponse:
+    """Generate a presigned URL for direct upload to storage."""
+    from pathlib import Path
+    from evidence_repository.storage.s3 import S3Storage
+
+    settings = get_settings()
+
+    # Validate storage backend supports presigned URLs
+    if not isinstance(storage, S3Storage):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Presigned uploads require S3-compatible storage (set STORAGE_BACKEND=s3)",
+        )
+
+    # Validate file extension
+    extension = Path(body.filename).suffix.lower()
+    if extension not in settings.supported_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {extension}. Supported: {settings.supported_extensions}",
+        )
+
+    # Validate file size
+    max_size = settings.max_file_size_mb * 1024 * 1024
+    if body.file_size > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File too large ({body.file_size} bytes). Maximum: {max_size} bytes",
+        )
+
+    # Validate profile_code
+    valid_profiles = {"general", "vc", "pharma", "insurance"}
+    if body.profile_code not in valid_profiles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid profile_code: {body.profile_code}. Valid options: {', '.join(sorted(valid_profiles))}",
+        )
+
+    # Create document and version records (pending upload)
+    import hashlib
+    document_id = uuid.uuid4()
+    version_id = uuid.uuid4()
+
+    # Generate unique filename
+    safe_filename = f"{document_id}{extension}"
+
+    # Create document record
+    document = Document(
+        id=document_id,
+        filename=safe_filename,
+        original_filename=body.filename,
+        content_type=body.content_type,
+        profile_code=body.profile_code,
+        metadata_={"uploaded_by": user.id, "pending_upload": True},
+    )
+    db.add(document)
+
+    # Generate storage path
+    path_key = storage.generate_path_key(
+        document_id=str(document_id),
+        version_id=str(version_id),
+        extension=extension,
+    )
+
+    # Create version record (pending)
+    version = DocumentVersion(
+        id=version_id,
+        document_id=document_id,
+        version_number=1,
+        file_size=body.file_size,
+        file_hash="pending",  # Will be updated after upload
+        storage_path=path_key,
+        extraction_status=ExtractionStatus.PENDING,
+        metadata_={"pending_upload": True},
+    )
+    db.add(version)
+
+    # Write audit log
+    await _write_audit_log(
+        db=db,
+        action=AuditAction.DOCUMENT_UPLOAD,
+        entity_type="document",
+        entity_id=document_id,
+        actor_id=user.id,
+        details={
+            "filename": body.filename,
+            "content_type": body.content_type,
+            "file_size": body.file_size,
+            "presigned": True,
+            "status": "pending_upload",
+        },
+        request=request,
+    )
+
+    await db.commit()
+
+    # Generate presigned URL
+    presigned = await storage.generate_presigned_upload_url(
+        path_key=path_key,
+        content_type=body.content_type,
+        ttl_seconds=3600,  # 1 hour
+    )
+
+    return PresignedUploadResponse(
+        upload_url=presigned["upload_url"],
+        document_id=document_id,
+        version_id=version_id,
+        key=presigned["key"],
+        content_type=body.content_type,
+        expires_in=presigned["expires_in"],
+        message=f"Upload '{body.filename}' to the presigned URL using PUT, then call /documents/confirm-upload",
+    )
+
+
+@router.post(
+    "/confirm-upload",
+    response_model=ConfirmUploadResponse,
+    summary="Confirm Presigned Upload",
+    description="""
+Confirm that a presigned upload completed successfully.
+
+Call this after uploading the file to the presigned URL.
+This will verify the file exists and queue it for processing.
+    """,
+)
+async def confirm_presigned_upload(
+    request: Request,
+    body: ConfirmUploadRequest,
+    db: AsyncSession = Depends(get_db_session),
+    storage: StorageBackend = Depends(get_storage),
+    user: User = Depends(get_current_user),
+) -> ConfirmUploadResponse:
+    """Confirm a presigned upload and queue for processing."""
+    # Get the document and version
+    result = await db.execute(
+        select(Document)
+        .options(selectinload(Document.versions))
+        .where(Document.id == body.document_id)
+    )
+    document = result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {body.document_id} not found",
+        )
+
+    # Find the version
+    version = next((v for v in document.versions if v.id == body.version_id), None)
+    if not version:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Version {body.version_id} not found",
+        )
+
+    # Verify file exists in storage
+    file_uri = f"s3://{storage.bucket_name}/{version.storage_path}"
+    if not await storage.exists(file_uri):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File not found in storage. Please upload to the presigned URL first.",
+        )
+
+    # Get file metadata from storage
+    try:
+        metadata = await storage.get_metadata(file_uri)
+        version.file_size = metadata.size
+        version.file_hash = metadata.etag
+    except Exception:
+        # Continue without metadata update
+        pass
+
+    # Mark as no longer pending
+    document.metadata_["pending_upload"] = False
+    version.metadata_["pending_upload"] = False
+
+    # Write audit log
+    await _write_audit_log(
+        db=db,
+        action=AuditAction.DOCUMENT_UPLOAD,
+        entity_type="document",
+        entity_id=document.id,
+        actor_id=user.id,
+        details={
+            "filename": document.original_filename,
+            "version_id": str(version.id),
+            "presigned": True,
+            "status": "confirmed",
+        },
+        request=request,
+    )
+
+    await db.commit()
+
+    # Enqueue processing job
+    job_queue = get_job_queue()
+    job_id = job_queue.enqueue(
+        job_type=JobType.PROCESS_DOCUMENT_VERSION,
+        payload={
+            "version_id": str(version.id),
+            "profile_code": document.profile_code,
+            "extraction_level": 2,
+        },
+        priority=0,
+    )
+
+    return ConfirmUploadResponse(
+        document_id=document.id,
+        version_id=version.id,
+        job_id=job_id,
+        message=f"Upload confirmed. Document '{document.original_filename}' queued for processing.",
+    )

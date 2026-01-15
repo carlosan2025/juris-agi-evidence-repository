@@ -115,3 +115,46 @@ class VersionUploadResponse(BaseModel):
     version_number: int = Field(..., description="Version number")
     job_id: str = Field(..., description="Job ID for tracking processing status")
     message: str = Field(default="Version queued for processing", description="Status message")
+
+
+class PresignedUploadRequest(BaseModel):
+    """Request to generate a presigned upload URL."""
+
+    filename: str = Field(..., description="Original filename")
+    content_type: str = Field(..., description="MIME type of the file")
+    file_size: int = Field(..., ge=1, description="File size in bytes")
+    profile_code: str = Field(
+        default="general",
+        description="Industry profile for extraction (vc, pharma, insurance, general)",
+    )
+
+
+class PresignedUploadResponse(BaseModel):
+    """Response with presigned URL for direct upload to storage."""
+
+    upload_url: str = Field(..., description="Presigned URL for PUT upload")
+    document_id: UUID = Field(..., description="Document ID (created)")
+    version_id: UUID = Field(..., description="Version ID (created)")
+    key: str = Field(..., description="Storage key for the file")
+    content_type: str = Field(..., description="Expected content type")
+    expires_in: int = Field(..., description="URL expiration in seconds")
+    message: str = Field(
+        default="Upload file directly to the presigned URL using PUT",
+        description="Instructions",
+    )
+
+
+class ConfirmUploadRequest(BaseModel):
+    """Request to confirm a presigned upload completed."""
+
+    document_id: UUID = Field(..., description="Document ID from presigned response")
+    version_id: UUID = Field(..., description="Version ID from presigned response")
+
+
+class ConfirmUploadResponse(BaseModel):
+    """Response after confirming upload."""
+
+    document_id: UUID = Field(..., description="Document ID")
+    version_id: UUID = Field(..., description="Version ID")
+    job_id: str = Field(..., description="Job ID for tracking processing status")
+    message: str = Field(default="Upload confirmed, processing queued", description="Status message")

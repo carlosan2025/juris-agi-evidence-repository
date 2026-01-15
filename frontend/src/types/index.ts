@@ -46,6 +46,24 @@ export interface Document {
   latest_version: DocumentVersion | null;
 }
 
+// Presigned upload types
+export interface PresignedUploadResponse {
+  upload_url: string;
+  document_id: string;
+  version_id: string;
+  key: string;
+  content_type: string;
+  expires_in: number;
+  message: string;
+}
+
+export interface ConfirmUploadResponse {
+  document_id: string;
+  version_id: string;
+  job_id: string;
+  message: string;
+}
+
 // Project types
 export interface Project {
   id: string;

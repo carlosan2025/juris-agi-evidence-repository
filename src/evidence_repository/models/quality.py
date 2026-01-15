@@ -101,7 +101,7 @@ class QualityConflict(Base, UUIDMixin):
     )
     extraction_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        ForeignKey("fact_extraction_runs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -221,7 +221,7 @@ class QualityOpenQuestion(Base, UUIDMixin):
     )
     extraction_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        ForeignKey("fact_extraction_runs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

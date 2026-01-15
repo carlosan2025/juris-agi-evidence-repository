@@ -126,7 +126,7 @@ class FactClaim(Base, UUIDMixin):
     )
     extraction_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        ForeignKey("fact_extraction_runs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -268,7 +268,7 @@ class FactMetric(Base, UUIDMixin):
     )
     extraction_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        ForeignKey("fact_extraction_runs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -438,7 +438,7 @@ class FactConstraint(Base, UUIDMixin):
     )
     extraction_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        ForeignKey("fact_extraction_runs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -556,7 +556,7 @@ class FactRisk(Base, UUIDMixin):
     )
     extraction_run_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extraction_runs.id", ondelete="CASCADE"),
+        ForeignKey("fact_extraction_runs.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

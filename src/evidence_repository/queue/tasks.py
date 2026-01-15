@@ -29,6 +29,8 @@ def _set_processing_status(version: DocumentVersion, status: ProcessingStatus) -
     # TODO: Enable once migration runs:
     # version.processing_status = status
     pass
+
+
 from evidence_repository.queue.jobs import JobManager, JobType, get_job_manager
 from evidence_repository.storage.local import LocalFilesystemStorage
 

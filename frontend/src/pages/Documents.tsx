@@ -1,20 +1,23 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Upload, FileText, Trash2, Download, RefreshCw, Eye, FolderPlus } from 'lucide-react';
-import { format } from 'date-fns';
 import {
-  Card,
-  Button,
-  Badge,
-  Modal,
-  Table,
-  TableHeader,
-  TableBody,
-  TableRow,
-  TableHead,
-  TableCell,
-} from '../components/ui';
+  FileText,
+  Trash2,
+  Download,
+  RefreshCw,
+  FolderOpen,
+  Loader2,
+  File,
+  FileImage,
+  FileSpreadsheet,
+  CheckCircle2,
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
+import { format } from 'date-fns';
+import { Button, Modal } from '../components/ui';
 import { documentsApi, projectsApi } from '../api';
 import type { Document, ProfileCode, Project } from '../types';
 import { PROFILE_OPTIONS } from '../types';
@@ -23,47 +26,114 @@ import { PROFILE_OPTIONS } from '../types';
 const MAX_FILE_SIZE_MB = 100;
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
+// Processing step labels for inline status display
+const PROCESSING_STEP_LABELS: Record<string, string> = {
+  pending: 'Queued',
+  uploaded: 'Uploading',
+  extracted: 'Extracting text',
+  spans_built: 'Building sections',
+  embedded: 'Creating embeddings',
+  facts_extracted: 'Extracting metadata',
+  quality_checked: 'Complete',
+  failed: 'Failed',
+};
+
+// File type icons based on content type
+function getFileIcon(contentType: string, className: string = 'h-5 w-5') {
+  if (contentType.includes('pdf')) {
+    return <FileText className={`${className} text-red-500`} />;
+  }
+  if (contentType.includes('image')) {
+    return <FileImage className={`${className} text-blue-500`} />;
+  }
+  if (contentType.includes('spreadsheet') || contentType.includes('excel') || contentType.includes('csv')) {
+    return <FileSpreadsheet className={`${className} text-green-500`} />;
+  }
+  if (contentType.includes('text') || contentType.includes('markdown')) {
+    return <FileText className={`${className} text-gray-500`} />;
+  }
+  return <File className={`${className} text-gray-400`} />;
+}
+
 export function Documents() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
-  const [uploadModalOpen, setUploadModalOpen] = useState(false);
-  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  const [selectedProfile, setSelectedProfile] = useState<ProfileCode>('vc');
-  const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [fileSizeError, setFileSizeError] = useState<string | null>(null);
+  const [selectedProfile, setSelectedProfile] = useState<ProfileCode>('general');
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [filesToUpload, setFilesToUpload] = useState<File[]>([]);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectModalDoc, setProjectModalDoc] = useState<Document | null>(null);
 
+  // Track document project counts
+  const [documentProjectCounts, setDocumentProjectCounts] = useState<Record<string, number>>({});
+
   const { data, isLoading } = useQuery({
-    queryKey: ['documents', { page, page_size: 20 }],
-    queryFn: () => documentsApi.list({ page, page_size: 20 }),
+    queryKey: ['documents', { page, page_size: 50 }],
+    queryFn: () => documentsApi.list({ page, page_size: 50 }),
+    // Poll every 2 seconds if any document is still processing
+    refetchInterval: (query) => {
+      const docs = query.state.data?.items || [];
+      const hasProcessing = docs.some(
+        (doc) =>
+          doc.latest_version?.upload_status === 'pending' ||
+          doc.latest_version?.extraction_status === 'pending' ||
+          doc.latest_version?.extraction_status === 'processing'
+      );
+      return hasProcessing ? 2000 : false;
+    },
   });
 
-  // Fetch all projects for the project association modal
+  // Fetch all projects to count document associations
   const { data: projectsData } = useQuery({
     queryKey: ['projects', { page: 1, page_size: 100 }],
     queryFn: () => projectsApi.list({ page: 1, page_size: 100 }),
   });
 
-  // Fetch projects for a specific document when the modal is open
+  // Count projects per document
+  useEffect(() => {
+    async function countProjects() {
+      if (!data?.items || !projectsData?.items) return;
+
+      const counts: Record<string, number> = {};
+      for (const doc of data.items) {
+        counts[doc.id] = 0;
+      }
+
+      for (const project of projectsData.items) {
+        try {
+          const projectDocs = await projectsApi.getDocuments(project.id);
+          for (const pd of projectDocs || []) {
+            if (counts[pd.document_id] !== undefined) {
+              counts[pd.document_id]++;
+            }
+          }
+        } catch {
+          // Ignore errors
+        }
+      }
+
+      setDocumentProjectCounts(counts);
+    }
+
+    countProjects();
+  }, [data?.items, projectsData?.items]);
+
+  // Fetch projects for project modal
   const { data: documentProjects, refetch: refetchDocumentProjects } = useQuery({
     queryKey: ['document-projects', projectModalDoc?.id],
     queryFn: async () => {
       if (!projectModalDoc) return [];
-      // We need to check each project's documents - the API returns ProjectDocument[]
-      // We'll track which projects this document belongs to
       const projectIds: string[] = [];
       for (const project of projectsData?.items || []) {
         try {
           const projectDocs = await projectsApi.getDocuments(project.id);
-          // Backend returns array of ProjectDocument, check document_id field
           if (projectDocs?.some((pd) => pd.document_id === projectModalDoc.id)) {
             projectIds.push(project.id);
           }
         } catch {
-          // Project may not have any documents
+          // Ignore
         }
       }
       return projectIds;
@@ -73,12 +143,14 @@ export function Documents() {
 
   const uploadMutation = useMutation({
     mutationFn: ({ file, profileCode }: { file: File; profileCode: ProfileCode }) =>
-      documentsApi.upload(file, profileCode),
+      documentsApi.upload(file, profileCode, undefined, () => {
+        queryClient.invalidateQueries({ queryKey: ['documents'] });
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
-      setUploadModalOpen(false);
-      setPendingFile(null);
-      setSelectedProfile('vc');
+    },
+    onError: (error) => {
+      console.error('Upload failed:', error);
     },
   });
 
@@ -89,8 +161,8 @@ export function Documents() {
     },
   });
 
-  const extractMutation = useMutation({
-    mutationFn: (id: string) => documentsApi.triggerExtraction(id),
+  const retryMutation = useMutation({
+    mutationFn: (id: string) => documentsApi.retry(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
     },
@@ -114,26 +186,23 @@ export function Documents() {
     },
   });
 
+  // Handle drag events for entire page
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (e.type === 'dragenter' || e.type === 'dragover') {
       setDragActive(true);
     } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
-  }, []);
-
-  const validateAndSetFile = useCallback((file: File) => {
-    if (file.size > MAX_FILE_SIZE_BYTES) {
-      setFileSizeError(
-        `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). ` +
-        `Maximum size is ${MAX_FILE_SIZE_MB} MB due to serverless platform limits.`
-      );
-      setPendingFile(null);
-    } else {
-      setFileSizeError(null);
-      setPendingFile(file);
+      // Only set inactive if leaving the window
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      if (
+        e.clientX <= rect.left ||
+        e.clientX >= rect.right ||
+        e.clientY <= rect.top ||
+        e.clientY >= rect.bottom
+      ) {
+        setDragActive(false);
+      }
     }
   }, []);
 
@@ -141,52 +210,29 @@ export function Documents() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      validateAndSetFile(e.dataTransfer.files[0]);
+
+    const files = Array.from(e.dataTransfer.files).filter(
+      (file) => file.size <= MAX_FILE_SIZE_BYTES
+    );
+
+    if (files.length > 0) {
+      setFilesToUpload(files);
+      setProfileModalOpen(true);
     }
-  }, [validateAndSetFile]);
+  }, []);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      validateAndSetFile(e.target.files[0]);
+  const handleUploadFiles = () => {
+    // Start uploading all files
+    for (const file of filesToUpload) {
+      uploadMutation.mutate({ file, profileCode: selectedProfile });
     }
+    setProfileModalOpen(false);
+    setFilesToUpload([]);
+    setSelectedProfile('general');
   };
 
-  const handleUpload = () => {
-    if (pendingFile && !fileSizeError) {
-      uploadMutation.mutate({ file: pendingFile, profileCode: selectedProfile });
-    }
-  };
-
-  const handleCloseUploadModal = () => {
-    setUploadModalOpen(false);
-    setPendingFile(null);
-    setFileSizeError(null);
-    setSelectedProfile('vc');
-  };
-
-  const handleOpenProjectModal = (doc: Document) => {
-    setProjectModalDoc(doc);
-    setProjectModalOpen(true);
-  };
-
-  const handleCloseProjectModal = () => {
-    setProjectModalOpen(false);
-    setProjectModalDoc(null);
-  };
-
-  const handleToggleProject = (projectId: string) => {
-    if (!projectModalDoc) return;
-
-    const isAttached = documentProjects?.includes(projectId);
-    if (isAttached) {
-      detachFromProjectMutation.mutate({ projectId, documentId: projectModalDoc.id });
-    } else {
-      attachToProjectMutation.mutate({ projectId, documentId: projectModalDoc.id });
-    }
-  };
-
-  const handleDownload = async (doc: Document) => {
+  const handleDownload = async (doc: Document, e: React.MouseEvent) => {
+    e.stopPropagation();
     try {
       const blob = await documentsApi.download(doc.id);
       const url = window.URL.createObjectURL(blob);
@@ -202,215 +248,267 @@ export function Documents() {
     }
   };
 
-  // Extraction status labels - these map to actual digestion pipeline status
-  const EXTRACTION_STATUS_LABELS: Record<string, { label: string; variant: 'default' | 'warning' | 'info' | 'success' | 'danger' }> = {
-    pending: { label: 'Pending', variant: 'default' },
-    processing: { label: 'Processing', variant: 'warning' },
-    completed: { label: 'Complete', variant: 'success' },
-    failed: { label: 'Failed', variant: 'danger' },
-  };
-
-  const getProcessingStatusBadge = (
-    uploadStatus: string | undefined,
-    _processingStatus: string | null | undefined, // Keep for backwards compatibility
-    extractionStatus?: string | null
-  ) => {
-    // If upload is pending or failed, show that status first (file not in storage)
-    if (uploadStatus === 'pending') {
-      return <Badge variant="warning">Upload Pending</Badge>;
+  const handleToggleProject = (projectId: string) => {
+    if (!projectModalDoc) return;
+    const isAttached = documentProjects?.includes(projectId);
+    if (isAttached) {
+      detachFromProjectMutation.mutate({ projectId, documentId: projectModalDoc.id });
+    } else {
+      attachToProjectMutation.mutate({ projectId, documentId: projectModalDoc.id });
     }
-    if (uploadStatus === 'failed') {
-      return <Badge variant="danger">Upload Failed</Badge>;
-    }
-
-    // Use extraction_status as the primary indicator (this is what the pipeline actually updates)
-    const status = extractionStatus || 'pending';
-    const statusInfo = EXTRACTION_STATUS_LABELS[status] || EXTRACTION_STATUS_LABELS.pending;
-    return <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>;
-  };
-
-  const getProfileBadge = (profileCode: string) => {
-    const profile = PROFILE_OPTIONS.find((p) => p.value === profileCode);
-    const colors: Record<string, string> = {
-      vc: 'bg-purple-100 text-purple-800',
-      pharma: 'bg-green-100 text-green-800',
-      insurance: 'bg-blue-100 text-blue-800',
-      general: 'bg-gray-100 text-gray-800',
-    };
-    return (
-      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colors[profileCode] || colors.general}`}>
-        {profile?.label || profileCode}
-      </span>
-    );
   };
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  // Get status display for a document
+  const getStatusDisplay = (doc: Document) => {
+    const version = doc.latest_version;
+    if (!version) return null;
+
+    const uploadStatus = version.upload_status;
+    const extractionStatus = version.extraction_status;
+    const processingStatus = version.processing_status;
+
+    // Upload pending
+    if (uploadStatus === 'pending') {
+      return (
+        <span className="flex items-center gap-1.5 text-amber-600 text-xs">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span>Uploading</span>
+        </span>
+      );
+    }
+
+    // Upload failed
+    if (uploadStatus === 'failed') {
+      return (
+        <span className="flex items-center gap-1.5 text-red-600 text-xs">
+          <AlertCircle className="h-3.5 w-3.5" />
+          <span>Upload Failed</span>
+        </span>
+      );
+    }
+
+    // Processing
+    if (extractionStatus === 'pending' || extractionStatus === 'processing') {
+      const stepLabel = PROCESSING_STEP_LABELS[processingStatus || 'pending'] || 'Processing';
+      return (
+        <span className="flex items-center gap-1.5 text-blue-600 text-xs">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span>{stepLabel}</span>
+        </span>
+      );
+    }
+
+    // Failed
+    if (extractionStatus === 'failed') {
+      return (
+        <span className="flex items-center gap-1.5 text-red-600 text-xs">
+          <AlertCircle className="h-3.5 w-3.5" />
+          <span>Failed</span>
+        </span>
+      );
+    }
+
+    // Complete
+    if (extractionStatus === 'completed') {
+      return (
+        <span className="flex items-center gap-1.5 text-green-600 text-xs">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+        </span>
+      );
+    }
+
+    return null;
+  };
+
+  // Check if document needs retry button
+  const needsRetry = (doc: Document) => {
+    const version = doc.latest_version;
+    return version?.extraction_status === 'failed' || version?.upload_status === 'failed';
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Documents</h1>
-        <Button onClick={() => setUploadModalOpen(true)}>
-          <Upload className="h-4 w-4" />
-          Upload Document
-        </Button>
+    <div
+      className="min-h-[calc(100vh-8rem)] relative"
+      onDragEnter={handleDrag}
+      onDragLeave={handleDrag}
+      onDragOver={handleDrag}
+      onDrop={handleDrop}
+    >
+      {/* Drop overlay */}
+      {dragActive && (
+        <div className="absolute inset-0 z-50 bg-blue-50/90 border-2 border-dashed border-blue-400 rounded-lg flex items-center justify-center pointer-events-none">
+          <div className="text-center">
+            <FileText className="h-16 w-16 text-blue-500 mx-auto mb-4" />
+            <p className="text-xl font-medium text-blue-700">Drop files to upload</p>
+            <p className="text-sm text-blue-500 mt-1">Multiple files supported</p>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-xl font-semibold text-gray-900">Documents</h1>
+        <span className="text-sm text-gray-500">
+          {data?.total || 0} files • Drag files anywhere to upload
+        </span>
       </div>
 
-      <Card padding="none">
-        {isLoading ? (
-          <div className="p-8 text-center text-gray-500">Loading documents...</div>
-        ) : data?.items.length === 0 ? (
-          <div className="p-8 text-center">
-            <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500">No documents uploaded yet</p>
-            <Button
-              variant="secondary"
-              className="mt-4"
-              onClick={() => setUploadModalOpen(true)}
-            >
-              Upload your first document
-            </Button>
-          </div>
-        ) : (
-          <>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Industry</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data?.items.map((doc) => (
-                  <TableRow key={doc.id}>
-                    <TableCell>
-                      <div
-                        className="flex items-center gap-2 cursor-pointer hover:text-blue-600 transition-colors"
-                        onClick={() => navigate(`/documents/${doc.id}`)}
-                      >
-                        <FileText className="h-4 w-4 text-gray-400" />
-                        <span className="font-medium">{doc.original_filename}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {getProfileBadge(doc.profile_code || 'general')}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-gray-500">{doc.content_type}</span>
-                    </TableCell>
-                    <TableCell>{doc.latest_version ? formatFileSize(doc.latest_version.file_size) : '-'}</TableCell>
-                    <TableCell>{getProcessingStatusBadge(doc.latest_version?.upload_status, doc.latest_version?.processing_status, doc.latest_version?.extraction_status)}</TableCell>
-                    <TableCell>
-                      {format(new Date(doc.created_at), 'MMM d, yyyy')}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => navigate(`/documents/${doc.id}`)}
-                          title="View details"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleOpenProjectModal(doc)}
-                          title="Manage projects"
-                        >
-                          <FolderPlus className="h-4 w-4 text-purple-500" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDownload(doc)}
-                          title="Download"
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                        {doc.latest_version?.extraction_status !== 'completed' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => extractMutation.mutate(doc.id)}
-                            disabled={extractMutation.isPending}
-                            title="Re-extract"
-                          >
-                            <RefreshCw className="h-4 w-4" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            if (confirm('Are you sure you want to delete this document?')) {
-                              deleteMutation.mutate(doc.id);
-                            }
-                          }}
-                          title="Delete"
-                        >
-                          <Trash2 className="h-4 w-4 text-red-500" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+      {/* File browser */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        {/* Column headers */}
+        <div className="grid grid-cols-12 gap-4 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wide">
+          <div className="col-span-5">Name</div>
+          <div className="col-span-2 text-right">Size</div>
+          <div className="col-span-2">Date Added</div>
+          <div className="col-span-1 text-center">Projects</div>
+          <div className="col-span-2 text-right">Actions</div>
+        </div>
 
-            {/* Pagination */}
-            {data && data.pages > 1 && (
-              <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200">
-                <span className="text-sm text-gray-500">
-                  Page {page} of {data.pages} ({data.total} documents)
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
+        {/* File list */}
+        <div className="divide-y divide-gray-100">
+          {isLoading ? (
+            <div className="px-4 py-12 text-center text-gray-500">
+              <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+              Loading documents...
+            </div>
+          ) : data?.items.length === 0 ? (
+            <div className="px-4 py-16 text-center">
+              <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500 mb-2">No documents yet</p>
+              <p className="text-sm text-gray-400">Drag and drop files anywhere to upload</p>
+            </div>
+          ) : (
+            data?.items.map((doc) => (
+              <div
+                key={doc.id}
+                className="grid grid-cols-12 gap-4 px-4 py-3 hover:bg-gray-50 cursor-pointer transition-colors items-center group"
+                onClick={() => navigate(`/documents/${doc.id}`)}
+              >
+                {/* Name + Status */}
+                <div className="col-span-5 flex items-center gap-3 min-w-0">
+                  {getFileIcon(doc.content_type)}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-gray-900 truncate">
+                        {doc.original_filename}
+                      </span>
+                      {getStatusDisplay(doc)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Size */}
+                <div className="col-span-2 text-right text-sm text-gray-500">
+                  {doc.latest_version ? formatFileSize(doc.latest_version.file_size) : '-'}
+                </div>
+
+                {/* Date */}
+                <div className="col-span-2 text-sm text-gray-500">
+                  {format(new Date(doc.created_at), 'MMM d, yyyy')}
+                </div>
+
+                {/* Projects count */}
+                <div className="col-span-1 text-center">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setProjectModalDoc(doc);
+                      setProjectModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-purple-600 transition-colors"
                   >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setPage((p) => Math.min(data.pages, p + 1))}
-                    disabled={page === data.pages}
+                    <FolderOpen className="h-4 w-4" />
+                    <span>{documentProjectCounts[doc.id] || 0}</span>
+                  </button>
+                </div>
+
+                {/* Actions */}
+                <div className="col-span-2 flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {needsRetry(doc) && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        retryMutation.mutate(doc.id);
+                      }}
+                      disabled={retryMutation.isPending}
+                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                      title="Retry processing"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${retryMutation.isPending ? 'animate-spin' : ''}`} />
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => handleDownload(doc, e)}
+                    className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+                    title="Download"
                   >
-                    Next
-                  </Button>
+                    <Download className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm('Delete this document?')) {
+                        deleteMutation.mutate(doc.id);
+                      }
+                    }}
+                    className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
               </div>
-            )}
-          </>
-        )}
-      </Card>
+            ))
+          )}
+        </div>
 
-      {/* Upload Modal */}
+        {/* Pagination */}
+        {data && data.pages > 1 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-50">
+            <span className="text-sm text-gray-500">
+              Page {page} of {data.pages}
+            </span>
+            <div className="flex gap-1">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setPage((p) => Math.min(data.pages, p + 1))}
+                disabled={page === data.pages}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Profile Selection Modal (for uploads) */}
       <Modal
-        isOpen={uploadModalOpen}
-        onClose={handleCloseUploadModal}
-        title="Upload Document"
+        isOpen={profileModalOpen}
+        onClose={() => {
+          setProfileModalOpen(false);
+          setFilesToUpload([]);
+        }}
+        title={`Upload ${filesToUpload.length} file${filesToUpload.length !== 1 ? 's' : ''}`}
       >
-        <div className="space-y-6">
-          {/* Industry Profile Selection */}
+        <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">
-              Select Industry Profile
-            </label>
-            <div className="grid grid-cols-2 gap-3">
+            <p className="text-sm text-gray-600 mb-3">
+              Select an industry profile for better metadata extraction:
+            </p>
+            <div className="grid grid-cols-2 gap-2">
               {PROFILE_OPTIONS.map((profile) => (
                 <button
                   key={profile.value}
@@ -422,170 +520,73 @@ export function Documents() {
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
-                  <div className="font-medium text-gray-900">{profile.label}</div>
-                  <div className="text-xs text-gray-500 mt-1">{profile.description}</div>
+                  <div className="font-medium text-gray-900 text-sm">{profile.label}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">{profile.description}</div>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* File Drop Zone */}
-          <div
-            className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-              dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300'
-            } ${pendingFile ? 'bg-green-50 border-green-300' : ''}`}
-            onDragEnter={handleDrag}
-            onDragLeave={handleDrag}
-            onDragOver={handleDrag}
-            onDrop={handleDrop}
-          >
-            {pendingFile ? (
-              <div>
-                <FileText className="h-12 w-12 text-green-500 mx-auto mb-4" />
-                <p className="text-gray-900 font-medium">{pendingFile.name}</p>
-                <p className="text-sm text-gray-500">{formatFileSize(pendingFile.size)}</p>
-                <button
-                  type="button"
-                  onClick={() => setPendingFile(null)}
-                  className="mt-2 text-sm text-red-600 hover:text-red-700"
-                >
-                  Remove
-                </button>
+          {/* File list preview */}
+          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 max-h-40 overflow-y-auto">
+            {filesToUpload.map((file, i) => (
+              <div key={i} className="flex items-center gap-2 px-3 py-2 text-sm">
+                {getFileIcon(file.type, 'h-4 w-4')}
+                <span className="truncate flex-1">{file.name}</span>
+                <span className="text-gray-400 text-xs">{formatFileSize(file.size)}</span>
               </div>
-            ) : (
-              <>
-                <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600 mb-2">
-                  Drag and drop a file here, or click to select
-                </p>
-                <input
-                  type="file"
-                  className="hidden"
-                  id="file-upload"
-                  onChange={handleFileSelect}
-                  accept=".pdf,.txt,.md,.csv,.xlsx,.png,.jpg,.jpeg,.webp"
-                />
-                <label htmlFor="file-upload">
-                  <span className="inline-flex items-center justify-center font-medium rounded-lg transition-colors px-4 py-2 text-sm gap-2 bg-gray-100 text-gray-900 hover:bg-gray-200 cursor-pointer">
-                    Select File
-                  </span>
-                </label>
-                <p className="text-xs text-gray-400 mt-4">
-                  Supported: PDF, TXT, MD, CSV, XLSX, PNG, JPG, WEBP (max {MAX_FILE_SIZE_MB} MB)
-                </p>
-              </>
-            )}
+            ))}
           </div>
 
-          {/* File Size Error */}
-          {fileSizeError && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-sm text-red-700">{fileSizeError}</p>
-              <p className="text-xs text-red-500 mt-1">
-                For larger files, please compress the document or split it into smaller parts.
-              </p>
-            </div>
-          )}
-
-          {/* Upload Button */}
-          <div className="flex justify-end gap-3">
-            <Button variant="secondary" onClick={handleCloseUploadModal}>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setProfileModalOpen(false);
+                setFilesToUpload([]);
+              }}
+            >
               Cancel
             </Button>
-            <Button
-              onClick={handleUpload}
-              disabled={!pendingFile || !!fileSizeError || uploadMutation.isPending}
-            >
-              {uploadMutation.isPending ? 'Uploading...' : `Upload as ${PROFILE_OPTIONS.find(p => p.value === selectedProfile)?.label}`}
+            <Button onClick={handleUploadFiles}>
+              Upload {filesToUpload.length} file{filesToUpload.length !== 1 ? 's' : ''}
             </Button>
           </div>
         </div>
       </Modal>
 
-      {/* Document Details Modal */}
-      <Modal
-        isOpen={!!selectedDoc}
-        onClose={() => setSelectedDoc(null)}
-        title="Document Details"
-        size="lg"
-      >
-        {selectedDoc && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium text-gray-500">Filename</label>
-                <p className="text-gray-900">{selectedDoc.original_filename}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-500">Industry Profile</label>
-                <p className="mt-1">{getProfileBadge(selectedDoc.profile_code || 'general')}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-500">Content Type</label>
-                <p className="text-gray-900">{selectedDoc.content_type}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-500">Size</label>
-                <p className="text-gray-900">{selectedDoc.latest_version ? formatFileSize(selectedDoc.latest_version.file_size) : '-'}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-500">Status</label>
-                <p>{getProcessingStatusBadge(selectedDoc.latest_version?.upload_status, selectedDoc.latest_version?.processing_status, selectedDoc.latest_version?.extraction_status)}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-500">Created</label>
-                <p className="text-gray-900">
-                  {format(new Date(selectedDoc.created_at), 'PPpp')}
-                </p>
-              </div>
-              <div className="col-span-2">
-                <label className="text-sm font-medium text-gray-500">Hash</label>
-                <p className="text-gray-900 font-mono text-sm truncate">
-                  {selectedDoc.file_hash}
-                </p>
-              </div>
-            </div>
-            {selectedDoc.metadata && Object.keys(selectedDoc.metadata).length > 0 && (
-              <div>
-                <label className="text-sm font-medium text-gray-500">Metadata</label>
-                <pre className="mt-1 p-3 bg-gray-50 rounded-lg text-sm overflow-auto">
-                  {JSON.stringify(selectedDoc.metadata, null, 2)}
-                </pre>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
-
       {/* Project Assignment Modal */}
       <Modal
         isOpen={projectModalOpen}
-        onClose={handleCloseProjectModal}
+        onClose={() => {
+          setProjectModalOpen(false);
+          setProjectModalDoc(null);
+        }}
         title="Assign to Projects"
       >
         {projectModalDoc && (
           <div className="space-y-4">
-            <div className="flex items-center gap-2 pb-4 border-b border-gray-200">
-              <FileText className="h-5 w-5 text-gray-400" />
-              <span className="font-medium text-gray-900">{projectModalDoc.original_filename}</span>
+            <div className="flex items-center gap-2 pb-3 border-b border-gray-200">
+              {getFileIcon(projectModalDoc.content_type)}
+              <span className="font-medium text-gray-900 truncate">
+                {projectModalDoc.original_filename}
+              </span>
             </div>
 
             {!projectsData?.items?.length ? (
               <div className="py-8 text-center">
-                <FolderPlus className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-                <p className="text-gray-500">No projects available</p>
-                <p className="text-sm text-gray-400 mt-1">Create a project first to assign documents</p>
+                <FolderOpen className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+                <p className="text-gray-500 text-sm">No projects available</p>
               </div>
             ) : (
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                <p className="text-sm text-gray-500 mb-3">
-                  Select projects to associate with this document:
-                </p>
+              <div className="space-y-1 max-h-64 overflow-y-auto">
                 {projectsData.items.map((project: Project) => {
                   const isAttached = documentProjects?.includes(project.id);
                   const isPending =
-                    (attachToProjectMutation.isPending && attachToProjectMutation.variables?.projectId === project.id) ||
-                    (detachFromProjectMutation.isPending && detachFromProjectMutation.variables?.projectId === project.id);
+                    (attachToProjectMutation.isPending &&
+                      attachToProjectMutation.variables?.projectId === project.id) ||
+                    (detachFromProjectMutation.isPending &&
+                      detachFromProjectMutation.variables?.projectId === project.id);
 
                   return (
                     <button
@@ -593,31 +594,24 @@ export function Documents() {
                       type="button"
                       onClick={() => handleToggleProject(project.id)}
                       disabled={isPending}
-                      className={`w-full flex items-center justify-between p-3 rounded-lg border-2 text-left transition-all ${
+                      className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-left transition-all ${
                         isAttached
-                          ? 'border-purple-500 bg-purple-50'
+                          ? 'border-purple-400 bg-purple-50'
                           : 'border-gray-200 hover:border-gray-300'
-                      } ${isPending ? 'opacity-50 cursor-wait' : ''}`}
+                      } ${isPending ? 'opacity-50' : ''}`}
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-gray-900">{project.name}</div>
-                        {project.description && (
-                          <div className="text-xs text-gray-500 truncate mt-0.5">
-                            {project.description}
-                          </div>
-                        )}
-                        {project.case_ref && (
-                          <div className="text-xs text-gray-400 mt-0.5">
-                            Ref: {project.case_ref}
-                          </div>
-                        )}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <FolderOpen
+                          className={`h-4 w-4 flex-shrink-0 ${
+                            isAttached ? 'text-purple-500' : 'text-gray-400'
+                          }`}
+                        />
+                        <span className="font-medium text-sm text-gray-900 truncate">
+                          {project.name}
+                        </span>
                       </div>
                       {isAttached && (
-                        <div className="ml-3 flex-shrink-0">
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                            Assigned
-                          </span>
-                        </div>
+                        <CheckCircle2 className="h-4 w-4 text-purple-500 flex-shrink-0" />
                       )}
                     </button>
                   );
@@ -625,8 +619,14 @@ export function Documents() {
               </div>
             )}
 
-            <div className="flex justify-end pt-4 border-t border-gray-200">
-              <Button variant="secondary" onClick={handleCloseProjectModal}>
+            <div className="flex justify-end pt-3 border-t border-gray-200">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setProjectModalOpen(false);
+                  setProjectModalDoc(null);
+                }}
+              >
                 Done
               </Button>
             </div>

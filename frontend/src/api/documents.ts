@@ -1,9 +1,6 @@
 import apiClient from './client';
 import type { Document, DocumentVersion, PaginatedResponse, PresignedUploadResponse, ConfirmUploadResponse } from '../types';
 
-// Threshold for using presigned uploads (4MB - below Vercel's 4.5MB limit)
-const PRESIGNED_UPLOAD_THRESHOLD = 4 * 1024 * 1024;
-
 export const documentsApi = {
   list: (params?: { page?: number; page_size?: number; extraction_status?: string }) =>
     apiClient.get<PaginatedResponse<Document>>('/documents', params),
@@ -11,20 +8,22 @@ export const documentsApi = {
   get: (id: string) => apiClient.get<Document>(`/documents/${id}`),
 
   /**
-   * Upload a document - automatically uses presigned URL for large files
+   * Upload a document using presigned URL (Agent-K optimistic pattern)
+   *
+   * Flow:
+   * 1. Presign (fast) → Create DB record, get upload URL → Document appears in list!
+   * 2. Upload (medium) → Client uploads directly to R2 (bypasses server)
+   * 3. Confirm (fast) → Trigger worker fire-and-forget
+   * → Background processing starts async, polling updates UI
    */
-  upload: async (file: File, profileCode: string = 'general', metadata?: Record<string, unknown>) => {
-    // Use presigned upload for large files to bypass Vercel's 4.5MB limit
-    if (file.size > PRESIGNED_UPLOAD_THRESHOLD) {
-      return documentsApi.uploadPresigned(file, profileCode);
-    }
-
-    // Small files can use direct upload
-    const additionalData: Record<string, string> = { profile_code: profileCode };
-    if (metadata) {
-      additionalData.metadata = JSON.stringify(metadata);
-    }
-    return apiClient.upload<Document>('/documents', file, additionalData);
+  upload: async (
+    file: File,
+    profileCode: string = 'general',
+    _metadata?: Record<string, unknown>,
+    onPresigned?: (documentId: string) => void
+  ) => {
+    // Always use presigned upload for consistent flow (Agent-K pattern)
+    return documentsApi.uploadPresigned(file, profileCode, onPresigned);
   },
 
   /**
@@ -48,16 +47,28 @@ export const documentsApi = {
     }),
 
   /**
-   * Upload a file using presigned URL (for large files)
+   * Upload a file using presigned URL (Agent-K optimistic pattern)
+   *
+   * The document record is created at Step 1 with upload_status=PENDING,
+   * so it appears in the list immediately while upload continues.
    */
-  uploadPresigned: async (file: File, profileCode: string = 'general'): Promise<Document> => {
-    // Step 1: Get presigned URL
+  uploadPresigned: async (
+    file: File,
+    profileCode: string = 'general',
+    onPresigned?: (documentId: string) => void
+  ): Promise<Document> => {
+    // Step 1: Get presigned URL (creates DB record with upload_status=PENDING)
     const presigned = await documentsApi.getPresignedUploadUrl(
       file.name,
       file.type || 'application/octet-stream',
       file.size,
       profileCode
     );
+
+    // Notify caller that document is now in DB (for optimistic UI refresh)
+    if (onPresigned) {
+      onPresigned(presigned.document_id);
+    }
 
     // Step 2: Upload directly to storage (bypasses Vercel)
     const uploadResponse = await fetch(presigned.upload_url, {
@@ -72,10 +83,10 @@ export const documentsApi = {
       throw new Error(`Upload to storage failed: ${uploadResponse.statusText}`);
     }
 
-    // Step 3: Confirm upload
+    // Step 3: Confirm upload (triggers background processing)
     await documentsApi.confirmUpload(presigned.document_id, presigned.version_id);
 
-    // Return a Document-like object (the actual document will be created by the backend)
+    // Return document info
     return {
       id: presigned.document_id,
       filename: file.name,
@@ -98,6 +109,18 @@ export const documentsApi = {
 
   triggerExtraction: (id: string) =>
     apiClient.post<{ job_id: string }>(`/documents/${id}/extract`),
+
+  /**
+   * Retry processing a failed or stuck document
+   */
+  retry: (id: string, force: boolean = false) =>
+    apiClient.post<RetryResponse>(`/documents/${id}/retry${force ? '?force=true' : ''}`),
+
+  /**
+   * Get detailed processing status for a document version
+   */
+  getVersionStatus: (versionId: string) =>
+    apiClient.get<VersionStatusResponse>(`/worker/version/${versionId}/status`),
 
   download: (id: string, versionId?: string) => {
     const url = versionId
@@ -154,4 +177,30 @@ export interface SpanItem {
   end_locator: Record<string, unknown> | null;
   metadata: Record<string, unknown>;
   created_at: string | null;
+}
+
+// Response type for document retry
+export interface RetryResponse {
+  status: string;
+  message: string;
+  document_id: string;
+  version_id: string;
+}
+
+// Response type for version processing status
+export interface VersionStatusResponse {
+  version_id: string;
+  document_id: string;
+  filename: string | null;
+  status: string;
+  processing_step: string;
+  processing_step_label: string;
+  upload_status: string | null;
+  error: string | null;
+  page_count: number | null;
+  text_length: number | null;
+  spans_count: number;
+  embeddings_count: number;
+  created_at: string;
+  updated_at: string;
 }

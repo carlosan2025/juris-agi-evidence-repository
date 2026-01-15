@@ -3,7 +3,6 @@ import {
   FileText,
   FolderOpen,
   Settings,
-  Activity,
   Search,
   Home,
   Menu,
@@ -17,7 +16,6 @@ const navigation = [
   { name: 'Documents', href: '/documents', icon: FileText },
   { name: 'Projects', href: '/projects', icon: FolderOpen },
   { name: 'Search', href: '/search', icon: Search },
-  { name: 'Jobs', href: '/jobs', icon: Activity },
   { name: 'Prompts', href: '/prompts', icon: BookOpen },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];

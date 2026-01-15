@@ -20,15 +20,8 @@ from evidence_repository.models.document import Document, DocumentVersion, Extra
 
 
 def _set_processing_status(version: DocumentVersion, status: ProcessingStatus) -> None:
-    """Set processing status on a version (no-op until migration runs).
-
-    TEMPORARY: This is a no-op until the processing_status column is added via migration.
-    Once migration 010_add_processing_status runs, uncomment the actual column in models/document.py
-    and update this function to actually set the value.
-    """
-    # TODO: Enable once migration runs:
-    # version.processing_status = status
-    pass
+    """Set processing status on a document version."""
+    version.processing_status = status
 
 
 from evidence_repository.queue.jobs import JobManager, JobType, get_job_manager

@@ -117,87 +117,29 @@ class Document(Base, UUIDMixin, TimestampMixin):
     # Industry profile for extraction (vc, pharma, insurance, general)
     profile_code: Mapped[str] = mapped_column(String(50), default="general", nullable=False)
 
-    # =========================================================================
-    # AGENT-K METADATA FIELDS (Migration 008)
-    # TEMPORARY FIX: Columns commented out until migration 008 runs on production
-    # Once migration 008_add_agentk_metadata_fields runs, uncomment these columns
-    # and remove the property fallbacks below.
-    # =========================================================================
-
     # Document classification (Agent-K inspired)
-    # document_type: Mapped[DocumentType | None] = mapped_column(
-    #     Enum(DocumentType, values_callable=lambda x: [e.value for e in x]),
-    #     default=DocumentType.UNKNOWN,
-    # )
+    document_type: Mapped[DocumentType | None] = mapped_column(
+        Enum(DocumentType, values_callable=lambda x: [e.value for e in x]),
+        default=DocumentType.UNKNOWN,
+    )
 
     # Source tracking
-    # source_type: Mapped[SourceType | None] = mapped_column(
-    #     Enum(SourceType, values_callable=lambda x: [e.value for e in x]),
-    #     default=SourceType.UNKNOWN,
-    # )
-    # source_url: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[SourceType | None] = mapped_column(
+        Enum(SourceType, values_callable=lambda x: [e.value for e in x]),
+        default=SourceType.UNKNOWN,
+    )
+    source_url: Mapped[str | None] = mapped_column(Text)
 
     # Extracted metadata arrays (for efficient filtering)
-    # sectors: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
-    # main_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
-    # geographies: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
-    # company_names: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
-    # authors: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    sectors: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
+    main_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    geographies: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
+    company_names: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    authors: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
 
     # Publishing info
-    # publishing_organization: Mapped[str | None] = mapped_column(String(300))
-    # publication_date: Mapped[date | None] = mapped_column(Date)
-
-    # Property fallbacks for Agent-K metadata fields
-    @property
-    def document_type(self) -> DocumentType | None:
-        """TEMPORARY: Returns UNKNOWN until migration 008 runs."""
-        return DocumentType.UNKNOWN
-
-    @property
-    def source_type(self) -> SourceType | None:
-        """TEMPORARY: Returns UNKNOWN until migration 008 runs."""
-        return SourceType.UNKNOWN
-
-    @property
-    def source_url(self) -> str | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def sectors(self) -> list[str] | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def main_topics(self) -> list[str] | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def geographies(self) -> list[str] | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def company_names(self) -> list[str] | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def authors(self) -> list[str] | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def publishing_organization(self) -> str | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def publication_date(self) -> date | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
+    publishing_organization: Mapped[str | None] = mapped_column(String(300))
+    publication_date: Mapped[date | None] = mapped_column(Date)
 
     # Flexible metadata storage
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
@@ -264,46 +206,18 @@ class DocumentVersion(Base, UUIDMixin):
     file_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     # Upload status (tracks whether file is actually in storage)
-    # TEMPORARY FIX: Column commented out until migration 009 runs on production
-    # Once migration 009_add_upload_status runs, uncomment this and remove the property below
-    # upload_status: Mapped[UploadStatus] = mapped_column(
-    #     Enum(UploadStatus, values_callable=lambda x: [e.value for e in x]),
-    #     default=UploadStatus.UPLOADED,  # Default for direct uploads
-    #     nullable=False,
-    # )
-
-    @property
-    def upload_status(self) -> UploadStatus:
-        """Get upload status.
-
-        TEMPORARY: Returns UPLOADED until migration runs and column is added.
-        All existing documents were uploaded via direct upload, so UPLOADED is correct.
-        """
-        return UploadStatus.UPLOADED
+    upload_status: Mapped[UploadStatus] = mapped_column(
+        Enum(UploadStatus, values_callable=lambda x: [e.value for e in x]),
+        default=UploadStatus.UPLOADED,
+        nullable=False,
+    )
 
     # Overall processing status (tracks progress through full pipeline)
-    # TEMPORARY FIX: Column commented out until migration runs on production
-    # Once migration 010_add_processing_status runs, uncomment this and remove the property below
-    # processing_status: Mapped[ProcessingStatus | None] = mapped_column(
-    #     Enum(ProcessingStatus, values_callable=lambda x: [e.value for e in x]),
-    #     default=ProcessingStatus.PENDING,
-    #     nullable=True,
-    # )
-
-    @property
-    def processing_status(self) -> ProcessingStatus | None:
-        """Get processing status derived from extraction_status.
-
-        TEMPORARY: Returns derived status until migration runs and column is added.
-        """
-        # Derive from extraction_status for backwards compatibility
-        if self.extraction_status == ExtractionStatus.COMPLETED:
-            return ProcessingStatus.EXTRACTED
-        elif self.extraction_status == ExtractionStatus.PROCESSING:
-            return ProcessingStatus.UPLOADED
-        elif self.extraction_status == ExtractionStatus.FAILED:
-            return ProcessingStatus.FAILED
-        return ProcessingStatus.PENDING
+    processing_status: Mapped[ProcessingStatus | None] = mapped_column(
+        Enum(ProcessingStatus, values_callable=lambda x: [e.value for e in x]),
+        default=ProcessingStatus.PENDING,
+        nullable=True,
+    )
 
     # Extracted text content
     extracted_text: Mapped[str | None] = mapped_column(Text)
@@ -318,30 +232,10 @@ class DocumentVersion(Base, UUIDMixin):
     # Page/sheet count (for PDFs, spreadsheets)
     page_count: Mapped[int | None] = mapped_column()
 
-    # =========================================================================
-    # TRUTHFULNESS ASSESSMENT (Agent-K inspired) - Migration 008
-    # TEMPORARY FIX: Columns commented out until migration 008 runs on production
-    # Once migration 008_add_agentk_metadata_fields runs, uncomment these columns
-    # and remove the property fallbacks below.
-    # =========================================================================
-    # truthfulness_score: Mapped[float | None] = mapped_column(Float)
-    # bias_score: Mapped[float | None] = mapped_column(Float)
-    # credibility_assessment: Mapped[dict | None] = mapped_column(JSON)
-
-    @property
-    def truthfulness_score(self) -> float | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def bias_score(self) -> float | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
-
-    @property
-    def credibility_assessment(self) -> dict | None:
-        """TEMPORARY: Returns None until migration 008 runs."""
-        return None
+    # Truthfulness assessment (Agent-K inspired)
+    truthfulness_score: Mapped[float | None] = mapped_column(Float)
+    bias_score: Mapped[float | None] = mapped_column(Float)
+    credibility_assessment: Mapped[dict | None] = mapped_column(JSON)
 
     # Version metadata
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)

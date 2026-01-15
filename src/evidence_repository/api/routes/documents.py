@@ -857,13 +857,11 @@ async def get_presigned_upload_url(
         file_size=body.file_size,
         file_hash="pending",  # Will be updated after upload
         storage_path=path_key,
-        # NOTE: upload_status column not yet in database - property returns UPLOADED
-        # Once migration 009_add_upload_status runs, uncomment: upload_status=UploadStatus.PENDING,
+        upload_status=UploadStatus.PENDING,
         extraction_status=ExtractionStatus.PENDING,
+        processing_status=ProcessingStatus.PENDING,
         metadata_={"pending_upload": True},
     )
-    # NOTE: processing_status column not yet in database - property derives value from extraction_status
-    # Once migration 010_add_processing_status runs, uncomment: version.processing_status = ProcessingStatus.PENDING
     db.add(version)
 
     # Write audit log
@@ -964,10 +962,8 @@ async def confirm_presigned_upload(
     # Mark as no longer pending and update upload/processing status
     document.metadata_["pending_upload"] = False
     version.metadata_["pending_upload"] = False
-    # NOTE: upload_status column not yet in database - property returns UPLOADED
-    # Once migration 009_add_upload_status runs, uncomment: version.upload_status = UploadStatus.UPLOADED
-    # NOTE: processing_status column not yet in database - property derives value from extraction_status
-    # Once migration 010_add_processing_status runs, uncomment: version.processing_status = ProcessingStatus.UPLOADED
+    version.upload_status = UploadStatus.UPLOADED
+    version.processing_status = ProcessingStatus.UPLOADED
 
     # Write audit log
     await _write_audit_log(

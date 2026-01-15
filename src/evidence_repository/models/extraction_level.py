@@ -295,7 +295,7 @@ class FactExtractionRun(Base, UUIDMixin):
     from documents.
     """
 
-    __tablename__ = "fact_extraction_runs"
+    __tablename__ = "extraction_runs_multilevel"
 
     # Document reference
     document_id: Mapped[uuid.UUID] = mapped_column(
@@ -372,7 +372,7 @@ class FactExtractionRun(Base, UUIDMixin):
     # Parent run (for triggered extractions)
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("fact_extraction_runs.id", ondelete="SET NULL"),
+        ForeignKey("extraction_runs_multilevel.id", ondelete="SET NULL"),
     )
 
     # Job reference (RQ job ID)
@@ -432,7 +432,7 @@ class FactExtractionRun(Base, UUIDMixin):
     __table_args__ = (
         # Prevent duplicate active runs for same (version, profile, process_context, level)
         Index(
-            "ix_fact_extraction_runs_active",
+            "ix_extraction_runs_multilevel_active",
             "version_id",
             "profile_id",
             "process_context",
@@ -441,14 +441,14 @@ class FactExtractionRun(Base, UUIDMixin):
             postgresql_where=(status.in_([ExtractionRunStatus.QUEUED, ExtractionRunStatus.RUNNING])),
         ),
         Index(
-            "ix_fact_extraction_runs_version_profile_context_level",
+            "ix_extraction_runs_multilevel_version_profile_context_level",
             "version_id",
             "profile_id",
             "process_context",
             "level_id",
         ),
-        Index("ix_fact_extraction_runs_status", "status"),
-        Index("ix_fact_extraction_runs_process_context", "process_context"),
+        Index("ix_extraction_runs_multilevel_status_new", "status"),
+        Index("ix_extraction_runs_multilevel_process_context", "process_context"),
     )
 
 

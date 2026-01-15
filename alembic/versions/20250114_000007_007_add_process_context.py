@@ -5,8 +5,8 @@ Revises: 006
 Create Date: 2025-01-14 00:00:07
 
 This migration adds:
-- process_context enum and column to fact_extraction_runs, facts_*, and quality_* tables
-- schema_version and vocab_version columns to fact_extraction_runs
+- process_context enum and column to extraction_runs_multilevel, facts_*, and quality_* tables
+- schema_version and vocab_version columns to extraction_runs_multilevel
 - Updated indexes to include process_context for proper partitioning
 """
 from typing import Sequence, Union
@@ -52,9 +52,9 @@ def upgrade() -> None:
     )
     process_context_enum.create(op.get_bind(), checkfirst=True)
 
-    # Add columns to fact_extraction_runs
+    # Add columns to extraction_runs_multilevel
     op.add_column(
-        "fact_extraction_runs",
+        "extraction_runs_multilevel",
         sa.Column(
             "process_context",
             sa.Enum(*PROCESS_CONTEXT_VALUES, name="processcontext"),
@@ -64,7 +64,7 @@ def upgrade() -> None:
         ),
     )
     op.add_column(
-        "fact_extraction_runs",
+        "extraction_runs_multilevel",
         sa.Column(
             "schema_version",
             sa.String(50),
@@ -74,7 +74,7 @@ def upgrade() -> None:
         ),
     )
     op.add_column(
-        "fact_extraction_runs",
+        "extraction_runs_multilevel",
         sa.Column(
             "vocab_version",
             sa.String(50),
@@ -156,28 +156,26 @@ def upgrade() -> None:
         ),
     )
 
-    # Create indexes on fact_extraction_runs
+    # Create indexes on extraction_runs_multilevel
     op.create_index(
-        "ix_fact_extraction_runs_process_context",
-        "fact_extraction_runs",
+        "ix_extraction_runs_multilevel_process_context",
+        "extraction_runs_multilevel",
         ["process_context"],
     )
 
     # Drop old index and create new one with process_context
-    op.drop_index("ix_fact_extraction_runs_version_profile_level", table_name="fact_extraction_runs")
+    op.drop_index("ix_extraction_runs_multilevel_version_profile_level", table_name="extraction_runs_multilevel")
     op.create_index(
-        "ix_fact_extraction_runs_version_profile_context_level",
-        "fact_extraction_runs",
+        "ix_extraction_runs_multilevel_version_profile_context_level",
+        "extraction_runs_multilevel",
         ["version_id", "profile_id", "process_context", "level_id"],
     )
 
-    # Update the unique partial index for active runs to include process_context
-    # First drop the old one
-    op.drop_index("ix_fact_extraction_runs_active", table_name="fact_extraction_runs")
-    # Create new one with process_context
+    # Create the unique partial index for active runs with process_context
+    # Note: No need to drop old one as it was never created in migration 003
     op.execute("""
-        CREATE UNIQUE INDEX ix_fact_extraction_runs_active
-        ON fact_extraction_runs (version_id, profile_id, process_context, level_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_extraction_runs_multilevel_active
+        ON extraction_runs_multilevel (version_id, profile_id, process_context, level_id)
         WHERE status IN ('queued', 'running')
     """)
 
@@ -317,20 +315,15 @@ def downgrade() -> None:
         ["version_id", "profile_id", "level_id"],
     )
 
-    # fact_extraction_runs
-    op.drop_index("ix_fact_extraction_runs_active", table_name="fact_extraction_runs")
+    # extraction_runs_multilevel
+    op.execute("DROP INDEX IF EXISTS ix_extraction_runs_multilevel_active")
+    op.execute("DROP INDEX IF EXISTS ix_extraction_runs_multilevel_process_context")
+    op.execute("DROP INDEX IF EXISTS ix_extraction_runs_multilevel_version_profile_context_level")
+    # Recreate original index (if it was dropped)
     op.execute("""
-        CREATE UNIQUE INDEX ix_fact_extraction_runs_active
-        ON fact_extraction_runs (version_id, profile_id, level_id)
-        WHERE status IN ('queued', 'running')
+        CREATE INDEX IF NOT EXISTS ix_extraction_runs_multilevel_version_profile_level
+        ON extraction_runs_multilevel (version_id, profile_id, level_id)
     """)
-    op.drop_index("ix_fact_extraction_runs_process_context", table_name="fact_extraction_runs")
-    op.drop_index("ix_fact_extraction_runs_version_profile_context_level", table_name="fact_extraction_runs")
-    op.create_index(
-        "ix_fact_extraction_runs_version_profile_level",
-        "fact_extraction_runs",
-        ["version_id", "profile_id", "level_id"],
-    )
 
     # Drop columns
     op.drop_column("quality_open_questions", "process_context")
@@ -339,9 +332,9 @@ def downgrade() -> None:
     op.drop_column("facts_constraints", "process_context")
     op.drop_column("facts_metrics", "process_context")
     op.drop_column("facts_claims", "process_context")
-    op.drop_column("fact_extraction_runs", "vocab_version")
-    op.drop_column("fact_extraction_runs", "schema_version")
-    op.drop_column("fact_extraction_runs", "process_context")
+    op.drop_column("extraction_runs_multilevel", "vocab_version")
+    op.drop_column("extraction_runs_multilevel", "schema_version")
+    op.drop_column("extraction_runs_multilevel", "process_context")
 
     # Drop the enum type
     op.execute("DROP TYPE IF EXISTS processcontext")

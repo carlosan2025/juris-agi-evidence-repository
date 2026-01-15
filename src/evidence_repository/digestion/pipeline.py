@@ -463,7 +463,10 @@ class DigestionPipeline:
         try:
             from evidence_repository.digestion.metadata_extractor import extract_metadata
 
-            # Try to get OpenAI key from database if not provided
+            # Try to get OpenAI key from multiple sources:
+            # 1. Passed parameter
+            # 2. Database-stored integration key
+            # 3. Environment variable via settings
             api_key = openai_api_key
             if not api_key:
                 try:
@@ -472,8 +475,16 @@ class DigestionPipeline:
 
                     service = IntegrationKeyService(self.db)
                     api_key = await service.get_provider_key(IntegrationProvider.OPENAI, "api_key")
+                    if api_key:
+                        logger.info("Using OpenAI key from database")
                 except Exception as e:
                     logger.debug(f"Could not get OpenAI key from database: {e}")
+
+            # Fall back to environment variable
+            if not api_key:
+                api_key = self._settings.openai_api_key
+                if api_key:
+                    logger.info("Using OpenAI key from environment variable")
 
             metadata = await extract_metadata(
                 text=version.extracted_text[:10000],  # Limit context

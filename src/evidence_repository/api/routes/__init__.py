@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from evidence_repository.api.routes.admin import router as admin_router
+from evidence_repository.api.routes.debug import router as debug_router
 from evidence_repository.api.routes.documents import router as documents_router
 from evidence_repository.api.routes.evidence import router as evidence_router
 from evidence_repository.api.routes.extraction import router as extraction_router
@@ -27,5 +28,6 @@ router.include_router(jobs_router, prefix="/jobs", tags=["Jobs"])
 router.include_router(ingest_router, prefix="/ingest", tags=["Bulk Ingestion"])
 router.include_router(admin_router, prefix="/admin", tags=["Admin"])
 router.include_router(worker_router, prefix="/worker", tags=["Worker"])
+router.include_router(debug_router, prefix="/debug", tags=["Debug"])
 
 __all__ = ["router"]

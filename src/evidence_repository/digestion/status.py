@@ -204,9 +204,11 @@ async def get_version_status(
         Status dict or None if not found.
     """
     import uuid
+    from sqlalchemy.orm import selectinload
 
     result = await db.execute(
         select(DocumentVersion)
+        .options(selectinload(DocumentVersion.document))
         .where(DocumentVersion.id == uuid.UUID(version_id))
     )
     version = result.scalar_one_or_none()
@@ -214,10 +216,29 @@ async def get_version_status(
     if not version:
         return None
 
+    # Map processing_status to human-readable step names
+    STEP_LABELS = {
+        "pending": "Waiting to start",
+        "uploaded": "File uploaded",
+        "extracted": "Extracting text",
+        "spans_built": "Building sections",
+        "embedded": "Generating embeddings",
+        "facts_extracted": "Extracting metadata",
+        "quality_checked": "Complete",
+        "failed": "Failed",
+    }
+
+    processing_step = version.processing_status.value if version.processing_status else "pending"
+    step_label = STEP_LABELS.get(processing_step, processing_step)
+
     return {
         "version_id": str(version.id),
         "document_id": str(version.document_id),
+        "filename": version.document.original_filename if version.document else None,
         "status": version.extraction_status.value,
+        "processing_step": processing_step,
+        "processing_step_label": step_label,
+        "upload_status": version.upload_status.value if version.upload_status else None,
         "created_at": version.created_at.isoformat(),
         "extracted_at": version.extracted_at.isoformat() if version.extracted_at else None,
         "text_length": len(version.extracted_text) if version.extracted_text else 0,
@@ -272,3 +293,64 @@ async def retry_failed_documents(
 
     logger.info(f"Reset {len(version_ids)} failed documents to pending")
     return len(version_ids)
+
+
+async def retry_single_document(
+    db: AsyncSession,
+    document_id: str,
+) -> dict[str, Any]:
+    """Reset a single document for reprocessing.
+
+    Works for documents that are failed, stuck in processing, or pending.
+
+    Args:
+        db: Async database session.
+        document_id: Document ID to retry.
+
+    Returns:
+        Status dict with result.
+    """
+    import uuid
+    from sqlalchemy import update
+    from sqlalchemy.orm import selectinload
+    from evidence_repository.models.document import ProcessingStatus as DocProcessingStatus
+
+    # Get document with versions
+    result = await db.execute(
+        select(Document)
+        .options(selectinload(Document.versions))
+        .where(Document.id == uuid.UUID(document_id))
+    )
+    document = result.scalar_one_or_none()
+
+    if not document:
+        return {"success": False, "error": "Document not found"}
+
+    if not document.versions:
+        return {"success": False, "error": "Document has no versions"}
+
+    version = document.versions[0]  # Latest version
+
+    # Check if already completed
+    if version.extraction_status == ExtractionStatus.COMPLETED:
+        return {
+            "success": False,
+            "error": "Document already completed. Use force=true to reprocess.",
+            "status": version.extraction_status.value,
+        }
+
+    # Reset to pending for reprocessing
+    version.extraction_status = ExtractionStatus.PENDING
+    version.processing_status = DocProcessingStatus.UPLOADED
+    version.extraction_error = None
+    await db.commit()
+
+    logger.info(f"Reset document {document_id} to pending for reprocessing")
+
+    return {
+        "success": True,
+        "document_id": str(document.id),
+        "version_id": str(version.id),
+        "filename": document.original_filename,
+        "message": "Document queued for reprocessing",
+    }

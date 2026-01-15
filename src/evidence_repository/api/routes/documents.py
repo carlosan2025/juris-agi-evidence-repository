@@ -616,6 +616,104 @@ async def trigger_extraction(
         )
 
 
+@router.post(
+    "/{document_id}/retry",
+    summary="Retry Document Processing",
+    description="""
+Reset a document for reprocessing.
+
+This endpoint resets a failed or stuck document back to pending status
+and triggers processing. Works for documents that are:
+- Failed
+- Stuck in processing state
+- Pending but not progressing
+
+Use `force=true` to reprocess an already completed document.
+    """,
+)
+async def retry_document(
+    document_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    force: bool = Query(False, description="Force reprocessing even if completed"),
+) -> dict:
+    """Retry processing a document."""
+    from evidence_repository.digestion.status import retry_single_document
+    from evidence_repository.models.document import ProcessingStatus as DocProcessingStatus
+    import httpx
+    import os
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Get document with versions
+    result = await db.execute(
+        select(Document)
+        .options(selectinload(Document.versions))
+        .where(Document.id == document_id)
+    )
+    document = result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document {document_id} not found",
+        )
+
+    if not document.versions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document has no versions",
+        )
+
+    version = document.versions[0]  # Latest version
+
+    # Check if already completed and force not set
+    if version.extraction_status == ExtractionStatus.COMPLETED and not force:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document already completed. Use force=true to reprocess.",
+        )
+
+    # Reset to pending for reprocessing
+    version.extraction_status = ExtractionStatus.PENDING
+    version.processing_status = DocProcessingStatus.UPLOADED
+    version.extraction_error = None
+    await db.commit()
+
+    # Trigger processing via fire-and-forget HTTP call
+    try:
+        base_url = os.environ.get("VERCEL_URL")
+        if base_url:
+            base_url = f"https://{base_url}"
+        else:
+            base_url = f"{request.url.scheme}://{request.url.netloc}"
+
+        api_key = request.headers.get("x-api-key", "")
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                await client.post(
+                    f"{base_url}/api/v1/worker/process-version-sync/{version.id}",
+                    headers={"x-api-key": api_key},
+                )
+            except httpx.TimeoutException:
+                pass  # Expected - we don't wait for completion
+            except Exception as e:
+                logger.warning(f"Fire-and-forget trigger failed: {e}")
+    except Exception as e:
+        logger.warning(f"Could not trigger immediate processing: {e}")
+
+    return {
+        "success": True,
+        "document_id": str(document.id),
+        "version_id": str(version.id),
+        "filename": document.original_filename,
+        "message": "Document queued for reprocessing",
+    }
+
+
 @router.delete(
     "/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,

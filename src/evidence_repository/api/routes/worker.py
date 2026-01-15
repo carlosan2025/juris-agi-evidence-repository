@@ -521,30 +521,48 @@ async def process_pending_sync(
 
             logger.info(f"Processing version {version_id} ({document.filename})")
 
+            from evidence_repository.models.document import ProcessingStatus as DocProcessingStatus
+
             # Mark as processing (both version and job)
             version.extraction_status = ExtractionStatus.PROCESSING
+            version.processing_status = DocProcessingStatus.UPLOADED
             await _update_job_for_version(db, version_id, JobStatus.RUNNING)
             await db.commit()
 
             # Download file from storage
             file_data = await pipeline.storage.download(version.storage_path)
 
-            # Run digestion pipeline
+            # Run digestion pipeline with status updates
             digest_result = DigestResult(
                 document_id=document.id,
                 version_id=version.id,
                 started_at=datetime.utcnow(),
             )
 
+            # Step 1: Parse (extract text)
+            version.processing_status = DocProcessingStatus.EXTRACTED
+            await db.commit()
             await pipeline._step_parse(document, version, file_data, digest_result)
+
+            # Step 2: Extract metadata (LLM)
+            version.processing_status = DocProcessingStatus.FACTS_EXTRACTED
+            await db.commit()
             await pipeline._step_extract_metadata(document, version, digest_result)
-            # Commit metadata changes explicitly
+            await db.commit()
+
+            # Step 3: Build sections/spans
+            version.processing_status = DocProcessingStatus.SPANS_BUILT
             await db.commit()
             await pipeline._step_build_sections(version, digest_result)
+
+            # Step 4: Generate embeddings
+            version.processing_status = DocProcessingStatus.EMBEDDED
+            await db.commit()
             await pipeline._step_generate_embeddings(version, digest_result)
 
             # Mark as completed (both version and job)
             version.extraction_status = ExtractionStatus.COMPLETED
+            version.processing_status = DocProcessingStatus.QUALITY_CHECKED
             digest_result.completed_at = datetime.utcnow()
 
             job_result = {
@@ -658,8 +676,11 @@ async def process_version_sync(
     logger.info(f"Processing version {version_id} ({document.filename})")
 
     try:
+        from evidence_repository.models.document import ProcessingStatus as DocProcessingStatus
+
         # Mark as processing
         version.extraction_status = ExtractionStatus.PROCESSING
+        version.processing_status = DocProcessingStatus.UPLOADED
         await db.commit()
 
         pipeline = DigestionPipeline(db=db)
@@ -667,22 +688,37 @@ async def process_version_sync(
         # Download file from storage
         file_data = await pipeline.storage.download(version.storage_path)
 
-        # Run digestion pipeline
+        # Run digestion pipeline with status updates
         digest_result = DigestResult(
             document_id=document.id,
             version_id=version.id,
             started_at=datetime.utcnow(),
         )
 
+        # Step 1: Parse (extract text)
+        version.processing_status = DocProcessingStatus.EXTRACTED
+        await db.commit()
         await pipeline._step_parse(document, version, file_data, digest_result)
+
+        # Step 2: Extract metadata (LLM)
+        version.processing_status = DocProcessingStatus.FACTS_EXTRACTED
+        await db.commit()
         await pipeline._step_extract_metadata(document, version, digest_result)
-        # Commit metadata changes explicitly
+        await db.commit()
+
+        # Step 3: Build sections/spans
+        version.processing_status = DocProcessingStatus.SPANS_BUILT
         await db.commit()
         await pipeline._step_build_sections(version, digest_result)
+
+        # Step 4: Generate embeddings
+        version.processing_status = DocProcessingStatus.EMBEDDED
+        await db.commit()
         await pipeline._step_generate_embeddings(version, digest_result)
 
         # Mark as completed
         version.extraction_status = ExtractionStatus.COMPLETED
+        version.processing_status = DocProcessingStatus.QUALITY_CHECKED
         digest_result.completed_at = datetime.utcnow()
         await db.commit()
 

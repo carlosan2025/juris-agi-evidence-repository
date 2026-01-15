@@ -17,6 +17,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from evidence_repository.config import get_settings
 from evidence_repository.models.document import Document, DocumentVersion, ExtractionStatus, ProcessingStatus
+
+
+def _set_processing_status(version: DocumentVersion, status: ProcessingStatus) -> None:
+    """Set processing status on a version (no-op until migration runs).
+
+    TEMPORARY: This is a no-op until the processing_status column is added via migration.
+    Once migration 010_add_processing_status runs, uncomment the actual column in models/document.py
+    and update this function to actually set the value.
+    """
+    # TODO: Enable once migration runs:
+    # version.processing_status = status
+    pass
 from evidence_repository.queue.jobs import JobManager, JobType, get_job_manager
 from evidence_repository.storage.local import LocalFilesystemStorage
 
@@ -2068,7 +2080,7 @@ def _pipeline_step_extract(
         # Update version
         version.extracted_text = text
         version.extraction_status = ExtractionStatus.COMPLETED
-        version.processing_status = ProcessingStatus.EXTRACTED
+        _set_processing_status(version, ProcessingStatus.EXTRACTED)
         version.extracted_at = datetime.utcnow()
         version.page_count = page_count
         version.extraction_error = None
@@ -2082,7 +2094,7 @@ def _pipeline_step_extract(
 
     except Exception as e:
         version.extraction_status = ExtractionStatus.FAILED
-        version.processing_status = ProcessingStatus.FAILED
+        _set_processing_status(version, ProcessingStatus.FAILED)
         version.extraction_error = str(e)
         db.commit()
         return {"status": "error", "error": str(e)}
@@ -2131,7 +2143,7 @@ def _pipeline_step_build_spans(
         spans_created = _build_spans_from_text(db, version)
 
         # Update processing status
-        version.processing_status = ProcessingStatus.SPANS_BUILT
+        _set_processing_status(version, ProcessingStatus.SPANS_BUILT)
         db.commit()
 
         return {
@@ -2141,7 +2153,7 @@ def _pipeline_step_build_spans(
 
     except Exception as e:
         db.rollback()
-        version.processing_status = ProcessingStatus.FAILED
+        _set_processing_status(version, ProcessingStatus.FAILED)
         db.commit()
         return {"status": "error", "error": str(e)}
 
@@ -2312,7 +2324,7 @@ def _pipeline_step_build_embeddings(
             loop.close()
 
         # Update processing status
-        version.processing_status = ProcessingStatus.EMBEDDED
+        _set_processing_status(version, ProcessingStatus.EMBEDDED)
         db.commit()
 
         return {
@@ -2324,7 +2336,7 @@ def _pipeline_step_build_embeddings(
 
     except Exception as e:
         db.rollback()
-        version.processing_status = ProcessingStatus.FAILED
+        _set_processing_status(version, ProcessingStatus.FAILED)
         db.commit()
         return {"status": "error", "error": str(e)}
 
@@ -2434,13 +2446,13 @@ def _pipeline_step_extract_facts(
 
         # Update processing status on success
         if result.get("status") == "completed":
-            version.processing_status = ProcessingStatus.FACTS_EXTRACTED
+            _set_processing_status(version, ProcessingStatus.FACTS_EXTRACTED)
             db.commit()
 
         return result
 
     except Exception as e:
-        version.processing_status = ProcessingStatus.FAILED
+        _set_processing_status(version, ProcessingStatus.FAILED)
         db.commit()
         return {"status": "error", "error": str(e)}
 
@@ -2496,13 +2508,13 @@ def _pipeline_step_quality_check(
 
         # Update processing status on success
         if result.get("status") == "completed":
-            version.processing_status = ProcessingStatus.QUALITY_CHECKED
+            _set_processing_status(version, ProcessingStatus.QUALITY_CHECKED)
             db.commit()
 
         return result
 
     except Exception as e:
-        version.processing_status = ProcessingStatus.FAILED
+        _set_processing_status(version, ProcessingStatus.FAILED)
         db.commit()
         return {"status": "error", "error": str(e)}
 

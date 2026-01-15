@@ -858,10 +858,11 @@ async def get_presigned_upload_url(
         file_hash="pending",  # Will be updated after upload
         storage_path=path_key,
         upload_status=UploadStatus.PENDING,  # Awaiting presigned upload
-        processing_status=ProcessingStatus.PENDING,  # Full pipeline pending
         extraction_status=ExtractionStatus.PENDING,
         metadata_={"pending_upload": True},
     )
+    # NOTE: processing_status column not yet in database - property derives value from extraction_status
+    # Once migration 010_add_processing_status runs, uncomment: version.processing_status = ProcessingStatus.PENDING
     db.add(version)
 
     # Write audit log
@@ -963,7 +964,8 @@ async def confirm_presigned_upload(
     document.metadata_["pending_upload"] = False
     version.metadata_["pending_upload"] = False
     version.upload_status = UploadStatus.UPLOADED
-    version.processing_status = ProcessingStatus.UPLOADED
+    # NOTE: processing_status column not yet in database - property derives value from extraction_status
+    # Once migration 010_add_processing_status runs, uncomment: version.processing_status = ProcessingStatus.UPLOADED
 
     # Write audit log
     await _write_audit_log(

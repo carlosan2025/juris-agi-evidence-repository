@@ -213,12 +213,28 @@ class DocumentVersion(Base, UUIDMixin):
     )
 
     # Overall processing status (tracks progress through full pipeline)
-    # NOTE: nullable=True for backwards compatibility until migration runs
-    processing_status: Mapped[ProcessingStatus | None] = mapped_column(
-        Enum(ProcessingStatus, values_callable=lambda x: [e.value for e in x]),
-        default=ProcessingStatus.PENDING,
-        nullable=True,
-    )
+    # TEMPORARY FIX: Column commented out until migration runs on production
+    # Once migration 010_add_processing_status runs, uncomment this and remove the property below
+    # processing_status: Mapped[ProcessingStatus | None] = mapped_column(
+    #     Enum(ProcessingStatus, values_callable=lambda x: [e.value for e in x]),
+    #     default=ProcessingStatus.PENDING,
+    #     nullable=True,
+    # )
+
+    @property
+    def processing_status(self) -> ProcessingStatus | None:
+        """Get processing status derived from extraction_status.
+
+        TEMPORARY: Returns derived status until migration runs and column is added.
+        """
+        # Derive from extraction_status for backwards compatibility
+        if self.extraction_status == ExtractionStatus.COMPLETED:
+            return ProcessingStatus.EXTRACTED
+        elif self.extraction_status == ExtractionStatus.PROCESSING:
+            return ProcessingStatus.UPLOADED
+        elif self.extraction_status == ExtractionStatus.FAILED:
+            return ProcessingStatus.FAILED
+        return ProcessingStatus.PENDING
 
     # Extracted text content
     extracted_text: Mapped[str | None] = mapped_column(Text)

@@ -77,6 +77,7 @@ async def extract_metadata(
     text: str,
     filename: str,
     use_llm: bool = True,
+    openai_api_key: str | None = None,
 ) -> dict[str, Any]:
     """Extract metadata from document text.
 
@@ -84,6 +85,7 @@ async def extract_metadata(
         text: Document text (first N characters).
         filename: Original filename for hints.
         use_llm: Whether to use LLM for extraction.
+        openai_api_key: Optional OpenAI API key (if not provided, uses settings).
 
     Returns:
         Extracted metadata dictionary.
@@ -94,15 +96,20 @@ async def extract_metadata(
     if not use_llm:
         return metadata
 
-    settings = get_settings()
-    if not settings.openai_api_key:
+    # Use provided key or fall back to settings
+    api_key = openai_api_key
+    if not api_key:
+        settings = get_settings()
+        api_key = settings.openai_api_key
+
+    if not api_key:
         logger.warning("OpenAI API key not configured (OPENAI_API_KEY env var), skipping LLM extraction")
         return metadata
 
     logger.info(f"OpenAI API key found, attempting LLM metadata extraction for: {filename}")
 
     try:
-        llm_metadata = await _extract_with_llm(text, filename)
+        llm_metadata = await _extract_with_llm(text, filename, api_key)
         metadata.update(llm_metadata)
         logger.info(f"LLM metadata extraction succeeded for: {filename}")
     except Exception as e:
@@ -160,20 +167,20 @@ def _extract_from_filename(filename: str) -> dict[str, Any]:
     return metadata
 
 
-async def _extract_with_llm(text: str, filename: str) -> dict[str, Any]:
+async def _extract_with_llm(text: str, filename: str, api_key: str) -> dict[str, Any]:
     """Extract metadata using LLM.
 
     Args:
         text: Document text.
         filename: Original filename.
+        api_key: OpenAI API key.
 
     Returns:
         Extracted metadata.
     """
     import openai
 
-    settings = get_settings()
-    client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+    client = openai.AsyncOpenAI(api_key=api_key)
 
     # Prepare prompt
     prompt = f"""Analyze this document and extract comprehensive metadata. Return a JSON object.

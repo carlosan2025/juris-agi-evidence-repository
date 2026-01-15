@@ -450,6 +450,7 @@ class DigestionPipeline:
         document: Document,
         version: DocumentVersion,
         result: DigestResult,
+        openai_api_key: str | None = None,
     ) -> None:
         """Extract metadata using LLM."""
         step_name = DigestStep.EXTRACT_METADATA.value
@@ -462,9 +463,22 @@ class DigestionPipeline:
         try:
             from evidence_repository.digestion.metadata_extractor import extract_metadata
 
+            # Try to get OpenAI key from database if not provided
+            api_key = openai_api_key
+            if not api_key:
+                try:
+                    from evidence_repository.models.integration_key import IntegrationProvider
+                    from evidence_repository.services.integration_key_service import IntegrationKeyService
+
+                    service = IntegrationKeyService(self.db)
+                    api_key = await service.get_provider_key(IntegrationProvider.OPENAI, "api_key")
+                except Exception as e:
+                    logger.debug(f"Could not get OpenAI key from database: {e}")
+
             metadata = await extract_metadata(
                 text=version.extracted_text[:10000],  # Limit context
                 filename=document.filename,
+                openai_api_key=api_key,
             )
 
             # Update document with extracted metadata

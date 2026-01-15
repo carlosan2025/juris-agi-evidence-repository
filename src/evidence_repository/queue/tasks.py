@@ -25,7 +25,7 @@ def _set_processing_status(version: DocumentVersion, status: ProcessingStatus) -
 
 
 from evidence_repository.queue.jobs import JobManager, JobType, get_job_manager
-from evidence_repository.storage.local import LocalFilesystemStorage
+from evidence_repository.storage import StorageBackend, get_storage_backend
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,9 @@ def _get_sync_db_session() -> Session:
     return SessionLocal()
 
 
-def _get_storage() -> LocalFilesystemStorage:
+def _get_storage() -> StorageBackend:
     """Get storage backend for worker tasks."""
-    settings = get_settings()
-    return LocalFilesystemStorage(base_path=settings.file_storage_root)
+    return get_storage_backend()
 
 
 def _update_progress(progress: float, message: str | None = None) -> None:
@@ -2020,7 +2019,7 @@ def task_process_document_version(
 
 def _pipeline_step_extract(
     db: Session,
-    storage: LocalFilesystemStorage,
+    storage: StorageBackend,
     version,
     document,
     reprocess: bool,

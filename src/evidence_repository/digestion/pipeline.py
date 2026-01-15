@@ -150,10 +150,8 @@ class DigestionPipeline:
     def storage(self):
         """Lazy-load storage backend."""
         if self._storage is None:
-            from evidence_repository.storage.local import LocalFilesystemStorage
-            self._storage = LocalFilesystemStorage(
-                base_path=self._settings.file_storage_root
-            )
+            from evidence_repository.storage import get_storage_backend
+            self._storage = get_storage_backend()
         return self._storage
 
     async def digest(

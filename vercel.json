@@ -11,6 +11,10 @@
     {
       "source": "/api/test",
       "destination": "/api/test.py"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
     }
   ],
   "functions": {

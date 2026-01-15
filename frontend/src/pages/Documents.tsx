@@ -18,6 +18,10 @@ import { documentsApi, projectsApi } from '../api';
 import type { Document, ProfileCode, Project } from '../types';
 import { PROFILE_OPTIONS } from '../types';
 
+// Vercel serverless functions have a 4.5MB request body limit
+const MAX_FILE_SIZE_MB = 4;
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+
 export function Documents() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
@@ -26,6 +30,7 @@ export function Documents() {
   const [dragActive, setDragActive] = useState(false);
   const [selectedProfile, setSelectedProfile] = useState<ProfileCode>('vc');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [fileSizeError, setFileSizeError] = useState<string | null>(null);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectModalDoc, setProjectModalDoc] = useState<Document | null>(null);
 
@@ -117,23 +122,36 @@ export function Documents() {
     }
   }, []);
 
+  const validateAndSetFile = useCallback((file: File) => {
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setFileSizeError(
+        `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). ` +
+        `Maximum size is ${MAX_FILE_SIZE_MB} MB due to serverless platform limits.`
+      );
+      setPendingFile(null);
+    } else {
+      setFileSizeError(null);
+      setPendingFile(file);
+    }
+  }, []);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setPendingFile(e.dataTransfer.files[0]);
+      validateAndSetFile(e.dataTransfer.files[0]);
     }
-  }, []);
+  }, [validateAndSetFile]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setPendingFile(e.target.files[0]);
+      validateAndSetFile(e.target.files[0]);
     }
   };
 
   const handleUpload = () => {
-    if (pendingFile) {
+    if (pendingFile && !fileSizeError) {
       uploadMutation.mutate({ file: pendingFile, profileCode: selectedProfile });
     }
   };
@@ -141,6 +159,7 @@ export function Documents() {
   const handleCloseUploadModal = () => {
     setUploadModalOpen(false);
     setPendingFile(null);
+    setFileSizeError(null);
     setSelectedProfile('vc');
   };
 
@@ -433,11 +452,21 @@ export function Documents() {
                   </span>
                 </label>
                 <p className="text-xs text-gray-400 mt-4">
-                  Supported: PDF, TXT, MD, CSV, XLSX, PNG, JPG, WEBP
+                  Supported: PDF, TXT, MD, CSV, XLSX, PNG, JPG, WEBP (max {MAX_FILE_SIZE_MB} MB)
                 </p>
               </>
             )}
           </div>
+
+          {/* File Size Error */}
+          {fileSizeError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-sm text-red-700">{fileSizeError}</p>
+              <p className="text-xs text-red-500 mt-1">
+                For larger files, please compress the document or split it into smaller parts.
+              </p>
+            </div>
+          )}
 
           {/* Upload Button */}
           <div className="flex justify-end gap-3">
@@ -446,7 +475,7 @@ export function Documents() {
             </Button>
             <Button
               onClick={handleUpload}
-              disabled={!pendingFile || uploadMutation.isPending}
+              disabled={!pendingFile || !!fileSizeError || uploadMutation.isPending}
             >
               {uploadMutation.isPending ? 'Uploading...' : `Upload as ${PROFILE_OPTIONS.find(p => p.value === selectedProfile)?.label}`}
             </Button>

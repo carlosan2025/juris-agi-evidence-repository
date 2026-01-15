@@ -675,6 +675,9 @@ async def process_version_sync(
         )
 
         await pipeline._step_parse(document, version, file_data, digest_result)
+        await pipeline._step_extract_metadata(document, version, digest_result)
+        # Commit metadata changes explicitly
+        await db.commit()
         await pipeline._step_build_sections(version, digest_result)
         await pipeline._step_generate_embeddings(version, digest_result)
 
@@ -692,6 +695,7 @@ async def process_version_sync(
             "filename": document.filename,
             "sections_created": digest_result.section_count,
             "embeddings_created": digest_result.embedding_count,
+            "extracted_metadata": digest_result.extracted_metadata,
             "duration_ms": int((digest_result.completed_at - digest_result.started_at).total_seconds() * 1000),
         }
 

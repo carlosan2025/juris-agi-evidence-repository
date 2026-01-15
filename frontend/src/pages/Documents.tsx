@@ -333,6 +333,16 @@ export function Documents() {
       );
     }
 
+    // Failed (check processing_status too, as extraction_status may not be updated yet)
+    if (extractionStatus === 'failed' || processingStatus === 'failed') {
+      return (
+        <span className="flex items-center gap-1.5 text-red-600 text-xs">
+          <AlertCircle className="h-3.5 w-3.5" />
+          <span>Failed</span>
+        </span>
+      );
+    }
+
     // Processing
     if (extractionStatus === 'pending' || extractionStatus === 'processing') {
       const stepLabel = PROCESSING_STEP_LABELS[processingStatus || 'pending'] || 'Processing';
@@ -340,16 +350,6 @@ export function Documents() {
         <span className="flex items-center gap-1.5 text-blue-600 text-xs">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           <span>{stepLabel}</span>
-        </span>
-      );
-    }
-
-    // Failed
-    if (extractionStatus === 'failed') {
-      return (
-        <span className="flex items-center gap-1.5 text-red-600 text-xs">
-          <AlertCircle className="h-3.5 w-3.5" />
-          <span>Failed</span>
         </span>
       );
     }
@@ -373,6 +373,7 @@ export function Documents() {
     return (
       version?.extraction_status === 'failed' ||
       version?.upload_status === 'failed' ||
+      version?.processing_status === 'failed' ||
       deletionStatus === 'failed'
     );
   };

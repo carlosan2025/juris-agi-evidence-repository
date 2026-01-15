@@ -126,12 +126,12 @@ async def get_processing_stats(db: AsyncSession) -> ProcessingStatus:
     )
     status.processed_last_24h = day_result.scalar() or 0
 
-    # Get failed in last hour
+    # Get failed in last hour (using created_at since DocumentVersion has no updated_at)
     failed_result = await db.execute(
         select(func.count(DocumentVersion.id))
         .where(
             DocumentVersion.extraction_status == ExtractionStatus.FAILED,
-            DocumentVersion.updated_at >= hour_ago,
+            DocumentVersion.created_at >= hour_ago,
         )
     )
     status.failed_last_hour = failed_result.scalar() or 0
@@ -245,12 +245,12 @@ async def retry_failed_documents(
 
     cutoff = datetime.utcnow() - timedelta(hours=older_than_hours)
 
-    # Find failed documents
+    # Find failed documents (using created_at since DocumentVersion has no updated_at)
     result = await db.execute(
         select(DocumentVersion.id)
         .where(
             DocumentVersion.extraction_status == ExtractionStatus.FAILED,
-            DocumentVersion.updated_at < cutoff,
+            DocumentVersion.created_at < cutoff,
         )
         .limit(limit)
     )

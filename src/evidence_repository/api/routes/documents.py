@@ -992,21 +992,51 @@ async def confirm_presigned_upload(
 
     await db.commit()
 
-    # Enqueue processing job
-    job_queue = get_job_queue()
-    job_id = job_queue.enqueue(
-        job_type=JobType.PROCESS_DOCUMENT_VERSION,
-        payload={
-            "version_id": str(version.id),
-            "profile_code": document.profile_code,
-            "extraction_level": 2,
-        },
-        priority=0,
-    )
+    # Mark version as pending for processing
+    version.extraction_status = ExtractionStatus.PENDING
+    await db.commit()
+
+    # Trigger processing via fire-and-forget HTTP call to worker endpoint
+    # This works on serverless (Vercel) where BackgroundTasks don't complete
+    import os
+    import httpx
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Try to trigger processing immediately (fire-and-forget)
+    # If this fails, the cron job will pick it up later
+    try:
+        # Get the base URL from environment or request
+        base_url = os.environ.get("VERCEL_URL")
+        if base_url:
+            base_url = f"https://{base_url}"
+        else:
+            # For local development, use request host
+            base_url = f"{request.url.scheme}://{request.url.netloc}"
+
+        api_key = request.headers.get("x-api-key", "")
+
+        # Fire-and-forget call to process this version
+        # We don't await the full response - just fire the request
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                await client.post(
+                    f"{base_url}/api/v1/worker/process-version-sync/{version.id}",
+                    headers={"x-api-key": api_key},
+                )
+            except httpx.TimeoutException:
+                # Expected - we don't wait for completion
+                pass
+            except Exception as e:
+                logger.warning(f"Fire-and-forget trigger failed: {e}")
+    except Exception as e:
+        logger.warning(f"Could not trigger immediate processing: {e}")
+        # Processing will be picked up by cron job
 
     return ConfirmUploadResponse(
         document_id=document.id,
         version_id=version.id,
-        job_id=job_id,
+        job_id=None,  # No longer using job queue for immediate processing
         message=f"Upload confirmed. Document '{document.original_filename}' queued for processing.",
     )

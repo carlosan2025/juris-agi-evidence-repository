@@ -24,7 +24,7 @@
   },
   "crons": [
     {
-      "path": "/api/v1/worker/process?batch_size=5&chain=false",
+      "path": "/api/v1/worker/cron/process",
       "schedule": "*/5 * * * *"
     }
   ]

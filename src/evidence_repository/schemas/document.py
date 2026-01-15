@@ -163,5 +163,5 @@ class ConfirmUploadResponse(BaseModel):
 
     document_id: UUID = Field(..., description="Document ID")
     version_id: UUID = Field(..., description="Version ID")
-    job_id: str = Field(..., description="Job ID for tracking processing status")
+    job_id: str | None = Field(None, description="Job ID for tracking (None if processed synchronously)")
     message: str = Field(default="Upload confirmed, processing queued", description="Status message")

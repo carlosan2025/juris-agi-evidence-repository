@@ -372,7 +372,7 @@ class FactExtractionRun(Base, UUIDMixin):
     # Parent run (for triggered extractions)
     parent_run_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("extraction_runs.id", ondelete="SET NULL"),
+        ForeignKey("fact_extraction_runs.id", ondelete="SET NULL"),
     )
 
     # Job reference (RQ job ID)

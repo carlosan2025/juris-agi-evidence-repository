@@ -501,8 +501,8 @@ async def process_pending_sync(
                 "document_id": str(document.id),
                 "filename": document.filename,
                 "status": "completed",
-                "spans_created": digest_result.spans_created,
-                "embeddings_created": digest_result.embeddings_created,
+                "sections_created": digest_result.section_count,
+                "embeddings_created": digest_result.embedding_count,
             })
 
             logger.info(f"Completed processing version {version_id}")
@@ -629,8 +629,8 @@ async def process_version_sync(
             "version_id": str(version_id),
             "document_id": str(document.id),
             "filename": document.filename,
-            "spans_created": digest_result.spans_created,
-            "embeddings_created": digest_result.embeddings_created,
+            "sections_created": digest_result.section_count,
+            "embeddings_created": digest_result.embedding_count,
             "duration_ms": int((digest_result.completed_at - digest_result.started_at).total_seconds() * 1000),
         }
 

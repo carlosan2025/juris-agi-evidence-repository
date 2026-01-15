@@ -167,7 +167,7 @@ export function Jobs() {
       <Card padding="none">
         {isLoading ? (
           <div className="p-8 text-center text-gray-500">Loading jobs...</div>
-        ) : data?.items.length === 0 ? (
+        ) : data?.jobs.length === 0 ? (
           <div className="p-8 text-center">
             <Activity className="h-12 w-12 text-gray-300 mx-auto mb-4" />
             <p className="text-gray-500">No jobs found</p>
@@ -181,30 +181,30 @@ export function Jobs() {
                   <TableHead>Type</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Duration</TableHead>
-                  <TableHead>Attempts</TableHead>
+                  <TableHead>Progress</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data?.items.map((job) => (
-                  <TableRow key={job.id} onClick={() => setSelectedJob(job)}>
+                {data?.jobs.map((job: Job) => (
+                  <TableRow key={job.job_id} onClick={() => setSelectedJob(job)}>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         {getStatusIcon(job.status)}
                         {getStatusBadge(job.status)}
                       </div>
                     </TableCell>
-                    <TableCell>{getTypeBadge(job.job_type)}</TableCell>
+                    <TableCell>{getTypeBadge(job.job_type as JobType)}</TableCell>
                     <TableCell>
                       <span className="text-sm text-gray-500">
-                        {formatDistanceToNow(new Date(job.created_at), { addSuffix: true })}
+                        {job.created_at ? formatDistanceToNow(new Date(job.created_at), { addSuffix: true }) : '-'}
                       </span>
                     </TableCell>
                     <TableCell>
-                      {job.started_at && job.completed_at ? (
+                      {job.started_at && job.ended_at ? (
                         <span className="text-sm">
                           {Math.round(
-                            (new Date(job.completed_at).getTime() -
+                            (new Date(job.ended_at).getTime() -
                               new Date(job.started_at).getTime()) /
                               1000
                           )}
@@ -218,7 +218,7 @@ export function Jobs() {
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">
-                        {job.attempts}/{job.max_attempts}
+                        {job.progress}%
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
@@ -229,19 +229,19 @@ export function Jobs() {
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
-                              cancelMutation.mutate(job.id);
+                              cancelMutation.mutate(job.job_id);
                             }}
                           >
                             <XCircle className="h-4 w-4 text-red-500" />
                           </Button>
                         )}
-                        {job.status === 'failed' && job.attempts < job.max_attempts && (
+                        {job.status === 'failed' && (
                           <Button
                             variant="ghost"
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation();
-                              retryMutation.mutate(job.id);
+                              retryMutation.mutate(job.job_id);
                             }}
                           >
                             <RotateCcw className="h-4 w-4 text-blue-500" />
@@ -254,10 +254,10 @@ export function Jobs() {
               </TableBody>
             </Table>
 
-            {data && data.pages > 1 && (
+            {data && data.total > 20 && (
               <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200">
                 <span className="text-sm text-gray-500">
-                  Page {page} of {data.pages} ({data.total} jobs)
+                  Page {page} of {Math.ceil(data.total / 20)} ({data.total} jobs)
                 </span>
                 <div className="flex gap-2">
                   <Button
@@ -271,8 +271,8 @@ export function Jobs() {
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => setPage((p) => Math.min(data.pages, p + 1))}
-                    disabled={page === data.pages}
+                    onClick={() => setPage((p) => Math.min(Math.ceil(data.total / 20), p + 1))}
+                    disabled={page === Math.ceil(data.total / 20)}
                   >
                     Next
                   </Button>
@@ -299,18 +299,19 @@ export function Jobs() {
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Type</label>
-                <p className="mt-1">{getTypeBadge(selectedJob.job_type)}</p>
+                <p className="mt-1">{getTypeBadge(selectedJob.job_type as JobType)}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Created</label>
                 <p className="text-gray-900">
-                  {format(new Date(selectedJob.created_at), 'PPpp')}
+                  {selectedJob.created_at ? format(new Date(selectedJob.created_at), 'PPpp') : '-'}
                 </p>
               </div>
               <div>
-                <label className="text-sm font-medium text-gray-500">Attempts</label>
+                <label className="text-sm font-medium text-gray-500">Progress</label>
                 <p className="text-gray-900">
-                  {selectedJob.attempts} / {selectedJob.max_attempts}
+                  {selectedJob.progress}%
+                  {selectedJob.progress_message && ` - ${selectedJob.progress_message}`}
                 </p>
               </div>
               {selectedJob.started_at && (
@@ -321,30 +322,30 @@ export function Jobs() {
                   </p>
                 </div>
               )}
-              {selectedJob.completed_at && (
+              {selectedJob.ended_at && (
                 <div>
                   <label className="text-sm font-medium text-gray-500">Completed</label>
                   <p className="text-gray-900">
-                    {format(new Date(selectedJob.completed_at), 'PPpp')}
+                    {format(new Date(selectedJob.ended_at), 'PPpp')}
                   </p>
                 </div>
               )}
             </div>
 
-            {selectedJob.error_message && (
+            {selectedJob.error && (
               <div>
                 <label className="text-sm font-medium text-gray-500">Error</label>
                 <pre className="mt-1 p-3 bg-red-50 text-red-700 rounded-lg text-sm overflow-auto">
-                  {selectedJob.error_message}
+                  {selectedJob.error}
                 </pre>
               </div>
             )}
 
-            {selectedJob.parameters && Object.keys(selectedJob.parameters).length > 0 && (
+            {selectedJob.metadata && Object.keys(selectedJob.metadata).length > 0 && (
               <div>
-                <label className="text-sm font-medium text-gray-500">Parameters</label>
+                <label className="text-sm font-medium text-gray-500">Metadata</label>
                 <pre className="mt-1 p-3 bg-gray-50 rounded-lg text-sm overflow-auto">
-                  {JSON.stringify(selectedJob.parameters, null, 2)}
+                  {JSON.stringify(selectedJob.metadata, null, 2)}
                 </pre>
               </div>
             )}

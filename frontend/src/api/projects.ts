@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Project, ProjectCreate, ProjectUpdate, PaginatedResponse, Document } from '../types';
+import type { Project, ProjectCreate, ProjectUpdate, PaginatedResponse, ProjectDocument } from '../types';
 
 export const projectsApi = {
   list: (params?: { page?: number; page_size?: number }) =>
@@ -14,12 +14,12 @@ export const projectsApi = {
 
   delete: (id: string) => apiClient.delete<void>(`/projects/${id}`),
 
-  // Document attachment
-  getDocuments: (projectId: string, params?: { page?: number; page_size?: number }) =>
-    apiClient.get<PaginatedResponse<Document>>(`/projects/${projectId}/documents`, params),
+  // Document attachment - backend returns list[ProjectDocumentResponse], not paginated
+  getDocuments: (projectId: string) =>
+    apiClient.get<ProjectDocument[]>(`/projects/${projectId}/documents`),
 
   attachDocument: (projectId: string, documentId: string, pinnedVersionId?: string) =>
-    apiClient.post<void>(`/projects/${projectId}/documents`, {
+    apiClient.post<ProjectDocument>(`/projects/${projectId}/documents`, {
       document_id: documentId,
       pinned_version_id: pinnedVersionId,
     }),

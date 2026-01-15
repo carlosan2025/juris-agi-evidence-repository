@@ -45,13 +45,14 @@ export function Documents() {
     queryKey: ['document-projects', projectModalDoc?.id],
     queryFn: async () => {
       if (!projectModalDoc) return [];
-      // We need to check each project's documents - the API returns project documents
+      // We need to check each project's documents - the API returns ProjectDocument[]
       // We'll track which projects this document belongs to
       const projectIds: string[] = [];
       for (const project of projectsData?.items || []) {
         try {
           const projectDocs = await projectsApi.getDocuments(project.id);
-          if (projectDocs?.items?.some((pd: { id: string }) => pd.id === projectModalDoc.id)) {
+          // Backend returns array of ProjectDocument, check document_id field
+          if (projectDocs?.some((pd) => pd.document_id === projectModalDoc.id)) {
             projectIds.push(project.id);
           }
         } catch {
@@ -193,16 +194,16 @@ export function Documents() {
     }
   };
 
-  const getProfileBadge = (profileCode: ProfileCode) => {
+  const getProfileBadge = (profileCode: string) => {
     const profile = PROFILE_OPTIONS.find((p) => p.value === profileCode);
-    const colors: Record<ProfileCode, string> = {
+    const colors: Record<string, string> = {
       vc: 'bg-purple-100 text-purple-800',
       pharma: 'bg-green-100 text-green-800',
       insurance: 'bg-blue-100 text-blue-800',
       general: 'bg-gray-100 text-gray-800',
     };
     return (
-      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colors[profileCode]}`}>
+      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${colors[profileCode] || colors.general}`}>
         {profile?.label || profileCode}
       </span>
     );
@@ -268,8 +269,8 @@ export function Documents() {
                     <TableCell>
                       <span className="text-gray-500">{doc.content_type}</span>
                     </TableCell>
-                    <TableCell>{formatFileSize(doc.file_size)}</TableCell>
-                    <TableCell>{getStatusBadge(doc.extraction_status)}</TableCell>
+                    <TableCell>{doc.latest_version ? formatFileSize(doc.latest_version.file_size) : '-'}</TableCell>
+                    <TableCell>{getStatusBadge(doc.latest_version?.extraction_status || 'pending')}</TableCell>
                     <TableCell>
                       {format(new Date(doc.created_at), 'MMM d, yyyy')}
                     </TableCell>
@@ -299,7 +300,7 @@ export function Documents() {
                         >
                           <Download className="h-4 w-4" />
                         </Button>
-                        {doc.extraction_status !== 'completed' && (
+                        {doc.latest_version?.extraction_status !== 'completed' && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -477,11 +478,11 @@ export function Documents() {
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Size</label>
-                <p className="text-gray-900">{formatFileSize(selectedDoc.file_size)}</p>
+                <p className="text-gray-900">{selectedDoc.latest_version ? formatFileSize(selectedDoc.latest_version.file_size) : '-'}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Status</label>
-                <p>{getStatusBadge(selectedDoc.extraction_status)}</p>
+                <p>{getStatusBadge(selectedDoc.latest_version?.extraction_status || 'pending')}</p>
               </div>
               <div>
                 <label className="text-sm font-medium text-gray-500">Created</label>

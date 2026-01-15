@@ -18,29 +18,32 @@ export const PROFILE_OPTIONS: { value: ProfileCode; label: string; description: 
   { value: 'general', label: 'General', description: 'Generic document analysis' },
 ];
 
-export interface Document {
-  id: string;
-  filename: string;
-  content_type: string;
-  file_hash: string;
-  file_size: number;
-  profile_code: ProfileCode;
-  metadata: Record<string, unknown>;
-  current_version_id: string | null;
-  extraction_status: ExtractionStatus;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface DocumentVersion {
   id: string;
   document_id: string;
   version_number: number;
-  storage_path: string;
   file_size: number;
-  extracted_text: string | null;
+  file_hash: string;
   extraction_status: ExtractionStatus;
+  extraction_error: string | null;
+  extracted_at: string | null;
+  page_count: number | null;
   created_at: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface Document {
+  id: string;
+  filename: string;
+  original_filename: string;
+  content_type: string;
+  file_hash: string | null;
+  profile_code: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  latest_version: DocumentVersion | null;
 }
 
 // Project types
@@ -52,7 +55,21 @@ export interface Project {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
   document_count?: number;
+  claim_count?: number;
+  metric_count?: number;
+}
+
+export interface ProjectDocument {
+  id: string;
+  project_id: string;
+  document_id: string;
+  pinned_version_id: string | null;
+  attached_at: string;
+  attached_by: string | null;
+  notes: string | null;
+  document: Document | null;
 }
 
 export interface ProjectCreate {
@@ -71,25 +88,26 @@ export interface ProjectUpdate {
 
 // Job types
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'retrying';
-export type JobType = 'extraction' | 'embedding' | 'ingestion' | 'analysis' | 'multi_level_extraction';
+export type JobType = 'extraction' | 'embedding' | 'ingestion' | 'analysis' | 'multi_level_extraction' | 'document_ingest' | 'document_extract' | 'document_embed' | 'document_process_full' | 'bulk_folder_ingest' | 'bulk_url_ingest';
 
 export interface Job {
-  id: string;
-  job_type: JobType;
+  job_id: string;
+  job_type: string;
   status: JobStatus;
-  priority: number;
-  entity_type: string | null;
-  entity_id: string | null;
-  parameters: Record<string, unknown>;
-  result: Record<string, unknown> | null;
-  error_message: string | null;
-  attempts: number;
-  max_attempts: number;
-  scheduled_at: string | null;
+  created_at: string | null;
   started_at: string | null;
-  completed_at: string | null;
-  created_at: string;
-  updated_at: string;
+  ended_at: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  progress: number;
+  progress_message: string | null;
+  metadata: Record<string, unknown>;
+}
+
+// Response type for job list (backend returns { jobs, total })
+export interface JobListResponse {
+  jobs: Job[];
+  total: number;
 }
 
 // Integration types

@@ -43,7 +43,7 @@ export function Dashboard() {
     },
     {
       name: 'Pending Jobs',
-      value: jobs?.items?.filter((j) => j.status === 'queued' || j.status === 'running').length ?? 0,
+      value: jobs?.jobs?.filter((j) => j.status === 'queued' || j.status === 'running').length ?? 0,
       icon: Activity,
       href: '/jobs',
       color: 'text-orange-600 bg-orange-100',
@@ -130,19 +130,19 @@ export function Dashboard() {
                     {doc.filename}
                   </p>
                   <p className="text-xs text-gray-500">
-                    {(doc.file_size / 1024).toFixed(1)} KB
+                    {doc.latest_version ? (doc.latest_version.file_size / 1024).toFixed(1) : '0'} KB
                   </p>
                 </div>
                 <Badge
                   variant={
-                    doc.extraction_status === 'completed'
+                    doc.latest_version?.extraction_status === 'completed'
                       ? 'success'
-                      : doc.extraction_status === 'failed'
+                      : doc.latest_version?.extraction_status === 'failed'
                       ? 'danger'
                       : 'default'
                   }
                 >
-                  {doc.extraction_status}
+                  {doc.latest_version?.extraction_status || 'pending'}
                 </Badge>
               </div>
             ))}
@@ -158,12 +158,12 @@ export function Dashboard() {
             </Link>
           </div>
           <div className="space-y-3">
-            {(jobs?.items?.length ?? 0) === 0 && (
+            {(jobs?.jobs?.length ?? 0) === 0 && (
               <p className="text-sm text-gray-500 text-center py-4">No jobs yet</p>
             )}
-            {jobs?.items?.map((job) => (
+            {jobs?.jobs?.map((job) => (
               <div
-                key={job.id}
+                key={job.job_id}
                 className="flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50"
               >
                 {getJobStatusIcon(job.status)}
@@ -172,7 +172,7 @@ export function Dashboard() {
                     {job.job_type}
                   </p>
                   <p className="text-xs text-gray-500">
-                    {new Date(job.created_at).toLocaleString()}
+                    {job.created_at ? new Date(job.created_at).toLocaleString() : '-'}
                   </p>
                 </div>
                 <Badge

@@ -117,29 +117,87 @@ class Document(Base, UUIDMixin, TimestampMixin):
     # Industry profile for extraction (vc, pharma, insurance, general)
     profile_code: Mapped[str] = mapped_column(String(50), default="general", nullable=False)
 
+    # =========================================================================
+    # AGENT-K METADATA FIELDS (Migration 008)
+    # TEMPORARY FIX: Columns commented out until migration 008 runs on production
+    # Once migration 008_add_agentk_metadata_fields runs, uncomment these columns
+    # and remove the property fallbacks below.
+    # =========================================================================
+
     # Document classification (Agent-K inspired)
-    document_type: Mapped[DocumentType | None] = mapped_column(
-        Enum(DocumentType, values_callable=lambda x: [e.value for e in x]),
-        default=DocumentType.UNKNOWN,
-    )
+    # document_type: Mapped[DocumentType | None] = mapped_column(
+    #     Enum(DocumentType, values_callable=lambda x: [e.value for e in x]),
+    #     default=DocumentType.UNKNOWN,
+    # )
 
     # Source tracking
-    source_type: Mapped[SourceType | None] = mapped_column(
-        Enum(SourceType, values_callable=lambda x: [e.value for e in x]),
-        default=SourceType.UNKNOWN,
-    )
-    source_url: Mapped[str | None] = mapped_column(Text)
+    # source_type: Mapped[SourceType | None] = mapped_column(
+    #     Enum(SourceType, values_callable=lambda x: [e.value for e in x]),
+    #     default=SourceType.UNKNOWN,
+    # )
+    # source_url: Mapped[str | None] = mapped_column(Text)
 
     # Extracted metadata arrays (for efficient filtering)
-    sectors: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
-    main_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
-    geographies: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
-    company_names: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
-    authors: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    # sectors: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
+    # main_topics: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    # geographies: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)))
+    # company_names: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
+    # authors: Mapped[list[str] | None] = mapped_column(ARRAY(String(200)))
 
     # Publishing info
-    publishing_organization: Mapped[str | None] = mapped_column(String(300))
-    publication_date: Mapped[date | None] = mapped_column(Date)
+    # publishing_organization: Mapped[str | None] = mapped_column(String(300))
+    # publication_date: Mapped[date | None] = mapped_column(Date)
+
+    # Property fallbacks for Agent-K metadata fields
+    @property
+    def document_type(self) -> DocumentType | None:
+        """TEMPORARY: Returns UNKNOWN until migration 008 runs."""
+        return DocumentType.UNKNOWN
+
+    @property
+    def source_type(self) -> SourceType | None:
+        """TEMPORARY: Returns UNKNOWN until migration 008 runs."""
+        return SourceType.UNKNOWN
+
+    @property
+    def source_url(self) -> str | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def sectors(self) -> list[str] | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def main_topics(self) -> list[str] | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def geographies(self) -> list[str] | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def company_names(self) -> list[str] | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def authors(self) -> list[str] | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def publishing_organization(self) -> str | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def publication_date(self) -> date | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
 
     # Flexible metadata storage
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
@@ -260,10 +318,30 @@ class DocumentVersion(Base, UUIDMixin):
     # Page/sheet count (for PDFs, spreadsheets)
     page_count: Mapped[int | None] = mapped_column()
 
-    # Truthfulness assessment (Agent-K inspired)
-    truthfulness_score: Mapped[float | None] = mapped_column(Float)
-    bias_score: Mapped[float | None] = mapped_column(Float)
-    credibility_assessment: Mapped[dict | None] = mapped_column(JSON)
+    # =========================================================================
+    # TRUTHFULNESS ASSESSMENT (Agent-K inspired) - Migration 008
+    # TEMPORARY FIX: Columns commented out until migration 008 runs on production
+    # Once migration 008_add_agentk_metadata_fields runs, uncomment these columns
+    # and remove the property fallbacks below.
+    # =========================================================================
+    # truthfulness_score: Mapped[float | None] = mapped_column(Float)
+    # bias_score: Mapped[float | None] = mapped_column(Float)
+    # credibility_assessment: Mapped[dict | None] = mapped_column(JSON)
+
+    @property
+    def truthfulness_score(self) -> float | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def bias_score(self) -> float | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
+
+    @property
+    def credibility_assessment(self) -> dict | None:
+        """TEMPORARY: Returns None until migration 008 runs."""
+        return None
 
     # Version metadata
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)

@@ -173,7 +173,7 @@ async def _extract_with_llm(text: str, filename: str) -> dict[str, Any]:
     client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
 
     # Prepare prompt
-    prompt = f"""Analyze this document and extract metadata. Return a JSON object.
+    prompt = f"""Analyze this document and extract comprehensive metadata. Return a JSON object.
 
 Filename: {filename}
 
@@ -181,19 +181,23 @@ Document content (first 10000 chars):
 {text[:10000]}
 
 Extract the following fields (use null if not determinable):
-- title: The document title
-- short_description: A one-sentence description (max 200 chars)
-- long_summary: A 2-3 paragraph summary
+- title: The document title (infer from content if not explicit)
+- short_description: A concise 2-3 sentence description of what this document is about and its purpose (max 300 chars)
+- long_summary: A comprehensive 2-3 paragraph summary covering the main points, conclusions, and key information
 - source_type: One of: {', '.join(DOCUMENT_TYPES)}
 - main_topics: Array of 3-5 main topics discussed
 - sectors: Array of relevant sectors from: {', '.join(SECTORS)}
 - geographies: Array of countries/regions mentioned
 - company_names: Array of company names mentioned
-- authors: Array of author names if identifiable
-- publishing_organization: The organization that published this
-- publication_date: Date if identifiable (YYYY-MM-DD format)
-- language: Primary language (ISO code)
-- key_metrics: Array of {{name, value}} for any important metrics/numbers
+- authors: Array of author names if identifiable (look for signatures, "prepared by", "written by", etc.)
+- publishing_organization: The organization that published or created this document
+- document_created_date: When the document was originally created/dated (YYYY-MM-DD format, look for dates in headers, footers, or content)
+- publication_date: When the document was published (YYYY-MM-DD format)
+- language: Primary language (ISO code, e.g., "en", "es", "fr")
+- key_metrics: Array of {{name, value}} for important metrics, numbers, or statistics mentioned
+- document_purpose: Brief description of why this document was created (e.g., "investment proposal", "quarterly update", "legal agreement")
+- confidentiality: Classification if mentioned (e.g., "confidential", "internal", "public")
+- version: Document version if mentioned (e.g., "v1.0", "Draft", "Final")
 
 Return ONLY valid JSON, no markdown formatting."""
 

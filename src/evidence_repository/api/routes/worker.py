@@ -416,6 +416,7 @@ async def cron_process_pending(
             )
 
             await pipeline._step_parse(document, version, file_data, digest_result)
+            await pipeline._step_extract_metadata(document, version, digest_result)
             await pipeline._step_build_sections(version, digest_result)
             await pipeline._step_generate_embeddings(version, digest_result)
 
@@ -534,6 +535,7 @@ async def process_pending_sync(
             )
 
             await pipeline._step_parse(document, version, file_data, digest_result)
+            await pipeline._step_extract_metadata(document, version, digest_result)
             await pipeline._step_build_sections(version, digest_result)
             await pipeline._step_generate_embeddings(version, digest_result)
 

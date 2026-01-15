@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, FolderOpen, Trash2, Edit, FileText } from 'lucide-react';
 import { format } from 'date-fns';
@@ -20,6 +21,7 @@ import type { Project, ProjectCreate, ProjectUpdate } from '../types';
 
 export function Projects() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [page, setPage] = useState(1);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -129,10 +131,13 @@ export function Projects() {
                 {data?.items.map((project) => (
                   <TableRow key={project.id}>
                     <TableCell>
-                      <div className="flex items-center gap-2">
+                      <div
+                        className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 -m-2 p-2 rounded-lg transition-colors"
+                        onClick={() => navigate(`/projects/${project.id}`)}
+                      >
                         <FolderOpen className="h-4 w-4 text-purple-500" />
                         <div>
-                          <span className="font-medium">{project.name}</span>
+                          <span className="font-medium text-blue-600 hover:text-blue-800">{project.name}</span>
                           {project.description && (
                             <p className="text-xs text-gray-500 truncate max-w-xs">
                               {project.description}

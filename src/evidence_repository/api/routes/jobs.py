@@ -241,8 +241,9 @@ async def run_job_sync(
     settings = get_settings()
 
     # Create sync database session
-    sync_url = settings.database_url.replace("+asyncpg", "+psycopg")
+    sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
     sync_url = sync_url.replace("ssl=require", "sslmode=require")
+    sync_url = sync_url.replace("ssl=true", "sslmode=require")
     engine = create_engine(sync_url)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
@@ -369,8 +370,9 @@ async def process_next_job(
     settings = get_settings()
 
     # Create sync database session
-    sync_url = settings.database_url.replace("+asyncpg", "+psycopg")
+    sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
     sync_url = sync_url.replace("ssl=require", "sslmode=require")
+    sync_url = sync_url.replace("ssl=true", "sslmode=require")
     engine = create_engine(sync_url)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()

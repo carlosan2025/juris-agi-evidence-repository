@@ -2342,10 +2342,10 @@ def _pipeline_step_extract_facts(
         async def run_extraction():
             from evidence_repository.extraction.multilevel import MultiLevelExtractionService
             from evidence_repository.models.extraction_level import (
-                ExtractionRun,
-                ExtractionRunStatus,
                 ExtractionProfile,
                 ExtractionProfileCode,
+                ExtractionRunStatus,
+                FactExtractionRun,
                 ProcessContext,
             )
 
@@ -2379,11 +2379,11 @@ def _pipeline_step_extract_facts(
 
                     if profile:
                         # Check for existing successful run with same process_context
-                        existing_stmt = select(ExtractionRun).where(
-                            ExtractionRun.version_id == version.id,
-                            ExtractionRun.profile_id == profile.id,
-                            ExtractionRun.process_context == process_ctx,
-                            ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+                        existing_stmt = select(FactExtractionRun).where(
+                            FactExtractionRun.version_id == version.id,
+                            FactExtractionRun.profile_id == profile.id,
+                            FactExtractionRun.process_context == process_ctx,
+                            FactExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
                         )
                         existing_result = await session.execute(existing_stmt)
                         existing_run = existing_result.scalar_one_or_none()
@@ -2524,10 +2524,10 @@ def task_upgrade_extraction_level(
         async def run_upgrade():
             from evidence_repository.extraction.multilevel import MultiLevelExtractionService
             from evidence_repository.models.extraction_level import (
-                ExtractionRun,
-                ExtractionRunStatus,
                 ExtractionProfile,
                 ExtractionProfileCode,
+                ExtractionRunStatus,
+                FactExtractionRun,
                 ProcessContext,
             )
 
@@ -2562,11 +2562,11 @@ def task_upgrade_extraction_level(
                     profile = await service._get_or_create_profile(session, profile_code)
 
                 # Check which levels already exist for this (profile, process_context)
-                existing_runs_stmt = select(ExtractionRun).where(
-                    ExtractionRun.version_id == ver_uuid,
-                    ExtractionRun.profile_id == profile.id,
-                    ExtractionRun.process_context == process_ctx,
-                    ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+                existing_runs_stmt = select(FactExtractionRun).where(
+                    FactExtractionRun.version_id == ver_uuid,
+                    FactExtractionRun.profile_id == profile.id,
+                    FactExtractionRun.process_context == process_ctx,
+                    FactExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
                 )
                 existing_result = await session.execute(existing_runs_stmt)
                 existing_runs = existing_result.scalars().all()

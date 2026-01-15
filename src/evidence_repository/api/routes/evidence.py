@@ -881,9 +881,9 @@ async def request_evidence_pack_extraction(
     from evidence_repository.models.extraction_level import (
         ExtractionProfile,
         ExtractionProfileCode,
-        ProcessContext,
-        ExtractionRun,
         ExtractionRunStatus,
+        FactExtractionRun,
+        ProcessContext,
     )
     from evidence_repository.queue.tasks import task_multilevel_extract
 
@@ -931,11 +931,11 @@ async def request_evidence_pack_extraction(
 
         existing_run = None
         if profile:
-            run_stmt = select(ExtractionRun).where(
-                ExtractionRun.version_id == version_id,
-                ExtractionRun.profile_id == profile.id,
-                ExtractionRun.process_context == proc_ctx,
-                ExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
+            run_stmt = select(FactExtractionRun).where(
+                FactExtractionRun.version_id == version_id,
+                FactExtractionRun.profile_id == profile.id,
+                FactExtractionRun.process_context == proc_ctx,
+                FactExtractionRun.status == ExtractionRunStatus.SUCCEEDED,
             )
             run_result = await db.execute(run_stmt)
             existing_run = run_result.scalar_one_or_none()
@@ -995,8 +995,8 @@ async def get_evidence_pack_extraction_status(
         ExtractionLevelCode,
         ExtractionProfile,
         ExtractionProfileCode,
-        ExtractionRun,
         ExtractionRunStatus,
+        FactExtractionRun,
         ProcessContext,
     )
 
@@ -1050,10 +1050,10 @@ async def get_evidence_pack_extraction_status(
         level_status = {}
 
         if profile:
-            runs_stmt = select(ExtractionRun).where(
-                ExtractionRun.version_id == version_id,
-                ExtractionRun.profile_id == profile.id,
-                ExtractionRun.process_context == proc_ctx,
+            runs_stmt = select(FactExtractionRun).where(
+                FactExtractionRun.version_id == version_id,
+                FactExtractionRun.profile_id == profile.id,
+                FactExtractionRun.process_context == proc_ctx,
             )
             runs_result = await db.execute(runs_stmt)
 

@@ -2,33 +2,32 @@
 
 This module provides a unified interface for enqueueing jobs that:
 1. Creates a persistent job record in the database
-2. Enqueues the job to Redis/RQ for processing
+2. Enqueues the job to Redis/RQ for processing (when Redis is available)
 3. Tracks status transitions and progress
 
 Workers update the database job record at each processing step.
+
+In serverless environments (Vercel), Redis is not available, so jobs are
+stored in the database only and processed via HTTP-triggered workers.
 """
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from redis import Redis
-from rq import Queue
-from rq.job import Job as RQJob
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from evidence_repository.config import get_settings
 from evidence_repository.models.job import Job, JobStatus, JobType
-from evidence_repository.queue.connection import (
-    get_high_priority_queue,
-    get_low_priority_queue,
-    get_queue,
-    get_redis_connection,
-)
 
 logger = logging.getLogger(__name__)
+
+# Check if running in serverless environment
+IS_SERVERLESS = os.environ.get("VERCEL") == "1"
 
 
 class JobQueue:
@@ -39,16 +38,9 @@ class JobQueue:
     - Getting job status from the database
     - Updating job progress and status
 
-    Multiple workers can run in parallel - each job is processed exactly once
-    by RQ, and workers update the database job record.
+    In serverless mode (Vercel), jobs are stored in the database only.
+    In traditional mode, jobs are also enqueued to Redis/RQ for processing.
     """
-
-    # Map priority strings to queue getters
-    PRIORITY_QUEUES = {
-        "high": get_high_priority_queue,
-        "normal": get_queue,
-        "low": get_low_priority_queue,
-    }
 
     # Map job types to their task functions
     JOB_TYPE_FUNCTIONS = {
@@ -72,17 +64,30 @@ class JobQueue:
 
     def __init__(
         self,
-        redis: Redis | None = None,
+        redis: Any | None = None,
         db_session_factory: sessionmaker | None = None,
     ):
         """Initialize JobQueue.
 
         Args:
-            redis: Redis connection (uses default if not provided).
+            redis: Redis connection (uses default if not provided, ignored in serverless).
             db_session_factory: SQLAlchemy session factory for database access.
         """
-        self.redis = redis or get_redis_connection()
         self.settings = get_settings()
+        self.redis = None
+        self._redis_available = False
+
+        # Only try to connect to Redis if not in serverless mode
+        if not IS_SERVERLESS:
+            try:
+                if redis:
+                    self.redis = redis
+                else:
+                    from evidence_repository.queue.connection import get_redis_connection
+                    self.redis = get_redis_connection()
+                self._redis_available = True
+            except Exception as e:
+                logger.warning(f"Redis not available, running in database-only mode: {e}")
 
         if db_session_factory:
             self._session_factory = db_session_factory
@@ -91,12 +96,34 @@ class JobQueue:
             sync_url = self.settings.database_url.replace(
                 "postgresql+asyncpg://", "postgresql+psycopg2://"
             )
-            engine = create_engine(sync_url, pool_pre_ping=True)
+            # Use NullPool in serverless for fresh connections each time
+            if IS_SERVERLESS:
+                engine = create_engine(sync_url, poolclass=NullPool)
+            else:
+                engine = create_engine(sync_url, pool_pre_ping=True)
             self._session_factory = sessionmaker(bind=engine)
 
     def _get_db_session(self) -> Session:
         """Get a database session."""
         return self._session_factory()
+
+    def _get_queue_for_priority(self, priority: int):
+        """Get the appropriate RQ queue for a priority level."""
+        if not self._redis_available:
+            return None
+
+        from evidence_repository.queue.connection import (
+            get_high_priority_queue,
+            get_low_priority_queue,
+            get_queue,
+        )
+
+        if priority >= 10:
+            return get_high_priority_queue()
+        elif priority < 0:
+            return get_low_priority_queue()
+        else:
+            return get_queue()
 
     def enqueue(
         self,
@@ -107,8 +134,9 @@ class JobQueue:
     ) -> str:
         """Enqueue a job for background processing.
 
-        Creates a persistent job record in the database, then enqueues
-        to Redis/RQ for processing.
+        Creates a persistent job record in the database. If Redis is available,
+        also enqueues to Redis/RQ for processing. Otherwise, jobs are processed
+        via HTTP-triggered workers (Vercel cron).
 
         Args:
             job_type: Type of job (JobType enum or string).
@@ -145,32 +173,30 @@ class JobQueue:
             db.commit()
             logger.info(f"Created job record: {job_id} type={job_type.value}")
 
-            # Select queue based on priority
-            if priority >= 10:
-                queue = get_high_priority_queue()
-            elif priority < 0:
-                queue = get_low_priority_queue()
+            # If Redis is available, also enqueue to RQ
+            if self._redis_available:
+                queue = self._get_queue_for_priority(priority)
+                if queue:
+                    # Get the task function for this job type
+                    func_path = self.JOB_TYPE_FUNCTIONS.get(job_type)
+                    if not func_path:
+                        raise ValueError(f"No task function configured for job type: {job_type}")
+
+                    # Enqueue to RQ
+                    rq_job = queue.enqueue(
+                        "evidence_repository.queue.task_runner.run_job",
+                        job_id=str(job_id),
+                        job_id_str=str(job_id),
+                        result_ttl=self.settings.redis_result_ttl,
+                    )
+
+                    # Update job with RQ job ID
+                    job.queue_job_id = rq_job.id
+                    db.commit()
+                    logger.info(f"Enqueued job {job_id} to queue {queue.name}, RQ job: {rq_job.id}")
             else:
-                queue = get_queue()
+                logger.info(f"Job {job_id} stored in database (serverless mode, no Redis)")
 
-            # Get the task function for this job type
-            func_path = self.JOB_TYPE_FUNCTIONS.get(job_type)
-            if not func_path:
-                raise ValueError(f"No task function configured for job type: {job_type}")
-
-            # Enqueue to RQ
-            rq_job = queue.enqueue(
-                "evidence_repository.queue.task_runner.run_job",
-                job_id=str(job_id),
-                job_id_str=str(job_id),
-                result_ttl=self.settings.redis_result_ttl,
-            )
-
-            # Update job with RQ job ID
-            job.queue_job_id = rq_job.id
-            db.commit()
-
-            logger.info(f"Enqueued job {job_id} to queue {queue.name}, RQ job: {rq_job.id}")
             return str(job_id)
 
         except Exception as e:
@@ -329,9 +355,10 @@ class JobQueue:
             if job.status != JobStatus.QUEUED:
                 return False
 
-            # Cancel in RQ if we have the reference
-            if job.queue_job_id:
+            # Cancel in RQ if we have Redis and a reference
+            if self._redis_available and job.queue_job_id:
                 try:
+                    from rq.job import Job as RQJob
                     rq_job = RQJob.fetch(job.queue_job_id, connection=self.redis)
                     rq_job.cancel()
                 except Exception:

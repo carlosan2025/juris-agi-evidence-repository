@@ -1,5 +1,6 @@
 """Health check endpoints."""
 
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
@@ -12,9 +13,16 @@ from evidence_repository.schemas.common import HealthResponse
 
 router = APIRouter()
 
+# Check if running in serverless environment
+IS_SERVERLESS = os.environ.get("VERCEL") == "1"
+
 
 async def _check_redis() -> tuple[str, dict | None]:
     """Check Redis connectivity and return status with info."""
+    # In serverless mode, Redis is not expected to be available
+    if IS_SERVERLESS:
+        return "skipped (serverless)", {"mode": "serverless", "note": "Redis not used in Vercel deployment"}
+
     try:
         from evidence_repository.queue.connection import get_redis_connection
 
@@ -83,7 +91,10 @@ async def health_check(
     redis_status, redis_info = await _check_redis()
 
     # Determine overall status
-    if db_status == "healthy" and redis_status == "healthy":
+    # In serverless mode, Redis is skipped so we only check database
+    if IS_SERVERLESS:
+        overall_status = "healthy" if db_status == "healthy" else "unhealthy"
+    elif db_status == "healthy" and redis_status == "healthy":
         overall_status = "healthy"
     elif db_status == "healthy" or redis_status == "healthy":
         overall_status = "degraded"
@@ -198,18 +209,22 @@ async def readiness_check(
 
     Service is ready when:
     - Database is accessible
-    - Redis is accessible (for job processing)
+    - Redis is accessible (for job processing) - optional in serverless mode
     """
     db_status, _ = await _check_database(db)
     redis_status, _ = await _check_redis()
 
-    ready = db_status == "healthy" and redis_status == "healthy"
+    # In serverless mode, only database is required
+    if IS_SERVERLESS:
+        ready = db_status == "healthy"
+    else:
+        ready = db_status == "healthy" and redis_status == "healthy"
 
     return {
         "ready": ready,
         "checks": {
             "database": db_status == "healthy",
-            "redis": redis_status == "healthy",
+            "redis": redis_status == "healthy" or redis_status.startswith("skipped"),
         },
     }
 

@@ -8,6 +8,7 @@ import {
   Home,
   Menu,
   X,
+  BookOpen,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -17,6 +18,7 @@ const navigation = [
   { name: 'Projects', href: '/projects', icon: FolderOpen },
   { name: 'Search', href: '/search', icon: Search },
   { name: 'Jobs', href: '/jobs', icon: Activity },
+  { name: 'Prompts', href: '/prompts', icon: BookOpen },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
 

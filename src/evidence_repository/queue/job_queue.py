@@ -92,9 +92,9 @@ class JobQueue:
         if db_session_factory:
             self._session_factory = db_session_factory
         else:
-            # Create sync engine for database access using psycopg2
+            # Create sync engine for database access using psycopg (psycopg3)
             sync_url = self.settings.database_url.replace(
-                "postgresql+asyncpg://", "postgresql+psycopg2://"
+                "postgresql+asyncpg://", "postgresql+psycopg://"
             )
             # Use NullPool in serverless for fresh connections each time
             if IS_SERVERLESS:

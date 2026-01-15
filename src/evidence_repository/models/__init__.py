@@ -12,7 +12,18 @@ from evidence_repository.models.analysis import (
 )
 from evidence_repository.models.audit import AuditAction, AuditLog
 from evidence_repository.models.base import Base, TimestampMixin, UUIDMixin
-from evidence_repository.models.document import Document, DocumentVersion, ExtractionStatus
+from evidence_repository.models.deletion import (
+    DeletionTask,
+    DeletionTaskStatus,
+    DeletionTaskType,
+    TASK_TYPE_ORDER,
+)
+from evidence_repository.models.document import (
+    DeletionStatus,
+    Document,
+    DocumentVersion,
+    ExtractionStatus,
+)
 from evidence_repository.models.embedding import EmbeddingChunk
 from evidence_repository.models.extraction import ExtractionRun, ExtractionRunStatus
 from evidence_repository.models.evidence import (
@@ -75,6 +86,12 @@ __all__ = [
     "Document",
     "DocumentVersion",
     "ExtractionStatus",
+    "DeletionStatus",
+    # Deletion Tracking
+    "DeletionTask",
+    "DeletionTaskStatus",
+    "DeletionTaskType",
+    "TASK_TYPE_ORDER",
     # Project
     "Project",
     "ProjectDocument",

@@ -75,6 +75,18 @@ class DocumentResponse(BaseSchema):
         alias="metadata_",
     )
 
+    # Deletion tracking fields
+    deletion_status: str = Field(
+        default="active",
+        description="Deletion status: active, marked, deleting, failed, deleted",
+    )
+    deletion_requested_at: datetime | None = Field(
+        default=None, description="When deletion was requested"
+    )
+    deletion_error: str | None = Field(
+        default=None, description="Last deletion error if failed"
+    )
+
     # Include latest version info
     latest_version: DocumentVersionResponse | None = Field(
         default=None, description="Latest document version"

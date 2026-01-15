@@ -26,8 +26,9 @@ from fastapi import APIRouter, Depends, Query, BackgroundTasks, HTTPException, s
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from evidence_repository.api.dependencies import get_current_user, User
+from evidence_repository.api.dependencies import get_current_user, get_storage, User
 from evidence_repository.db.session import get_db_session
+from evidence_repository.storage.base import StorageBackend
 from evidence_repository.models.document import DocumentVersion, ExtractionStatus
 from evidence_repository.models.job import Job, JobStatus
 
@@ -619,6 +620,45 @@ async def process_pending_sync(
         "remaining": remaining,
         "results": results,
     }
+
+
+# =============================================================================
+# Deletion Processing Endpoints
+# =============================================================================
+
+
+@router.post(
+    "/process-deletion/{document_id}",
+    summary="Process Document Deletion (Sync)",
+    description="""
+Process deletion tasks for a document synchronously.
+
+This endpoint processes all pending deletion tasks for a document in order:
+1. Storage files (R2)
+2. Embedding chunks
+3. Spans
+4. Extraction runs
+5. Facts tables
+6. Quality tables
+7. Project associations
+8. Document versions
+9. Document record (final)
+
+Each task is tracked individually. If any task fails, the process stops
+and the document is marked as DELETION_FAILED. Use retry-deletion to resume.
+    """,
+)
+async def process_deletion(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    storage: StorageBackend = Depends(get_storage),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Process deletion tasks for a document."""
+    from evidence_repository.digestion.deletion import process_deletion_tasks
+
+    result = await process_deletion_tasks(db, document_id, storage)
+    return result
 
 
 @router.post(

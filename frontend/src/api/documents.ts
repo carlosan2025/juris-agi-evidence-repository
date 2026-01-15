@@ -102,7 +102,21 @@ export const documentsApi = {
     };
   },
 
-  delete: (id: string) => apiClient.delete<void>(`/documents/${id}`),
+  /**
+   * Delete a document (triggers safe cascading deletion)
+   * Returns deletion task info instead of void
+   */
+  delete: (id: string) => apiClient.delete<DeleteResponse>(`/documents/${id}`),
+
+  /**
+   * Get deletion status for a document
+   */
+  getDeletionStatus: (id: string) => apiClient.get<DeletionStatusResponse>(`/documents/${id}/deletion-status`),
+
+  /**
+   * Retry a failed deletion
+   */
+  retryDeletion: (id: string) => apiClient.post<DeleteResponse>(`/documents/${id}/retry-deletion`),
 
   getVersions: (id: string) =>
     apiClient.get<DocumentVersion[]>(`/documents/${id}/versions`),
@@ -203,4 +217,44 @@ export interface VersionStatusResponse {
   embeddings_count: number;
   created_at: string;
   updated_at: string;
+}
+
+// Response type for document deletion
+export interface DeleteResponse {
+  status: string;
+  document_id: string;
+  filename: string;
+  task_count: number;
+  message: string;
+}
+
+// Response type for deletion status
+export interface DeletionStatusResponse {
+  document_id: string;
+  filename: string;
+  deletion_status: string;
+  deletion_requested_at: string | null;
+  deletion_requested_by: string | null;
+  deletion_completed_at: string | null;
+  deletion_error: string | null;
+  task_summary: {
+    total: number;
+    pending: number;
+    in_progress: number;
+    completed: number;
+    failed: number;
+    skipped: number;
+  };
+  tasks: DeletionTask[];
+}
+
+export interface DeletionTask {
+  id: string;
+  type: string;
+  resource_id: string;
+  resource_count: number;
+  status: string;
+  error_message: string | null;
+  retry_count: number;
+  processing_order: number;
 }

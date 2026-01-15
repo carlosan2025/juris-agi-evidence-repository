@@ -38,6 +38,14 @@ const PROCESSING_STEP_LABELS: Record<string, string> = {
   failed: 'Failed',
 };
 
+// Deletion status labels
+const DELETION_STATUS_LABELS: Record<string, string> = {
+  marked: 'Deleting...',
+  deleting: 'Deleting...',
+  failed: 'Deletion Failed',
+  deleted: 'Deleted',
+};
+
 // File type icons based on content type
 function getFileIcon(contentType: string, className: string = 'h-5 w-5') {
   if (contentType.includes('pdf')) {
@@ -72,15 +80,19 @@ export function Documents() {
   const { data, isLoading } = useQuery({
     queryKey: ['documents', { page, page_size: 50 }],
     queryFn: () => documentsApi.list({ page, page_size: 50 }),
-    // Poll every 2 seconds if any document is still processing
+    // Poll every 2 seconds if any document is still processing or being deleted
     refetchInterval: (query) => {
       const docs = query.state.data?.items || [];
-      const hasProcessing = docs.some(
-        (doc) =>
+      const hasProcessing = docs.some((doc) => {
+        const deletionStatus = (doc as any).deletion_status;
+        return (
           doc.latest_version?.upload_status === 'pending' ||
           doc.latest_version?.extraction_status === 'pending' ||
-          doc.latest_version?.extraction_status === 'processing'
-      );
+          doc.latest_version?.extraction_status === 'processing' ||
+          deletionStatus === 'marked' ||
+          deletionStatus === 'deleting'
+        );
+      });
       return hasProcessing ? 2000 : false;
     },
   });
@@ -163,6 +175,13 @@ export function Documents() {
 
   const retryMutation = useMutation({
     mutationFn: (id: string) => documentsApi.retry(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+    },
+  });
+
+  const retryDeletionMutation = useMutation({
+    mutationFn: (id: string) => documentsApi.retryDeletion(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents'] });
     },
@@ -266,6 +285,27 @@ export function Documents() {
 
   // Get status display for a document
   const getStatusDisplay = (doc: Document) => {
+    // Check deletion status first
+    const deletionStatus = (doc as any).deletion_status;
+    if (deletionStatus && deletionStatus !== 'active') {
+      if (deletionStatus === 'marked' || deletionStatus === 'deleting') {
+        return (
+          <span className="flex items-center gap-1.5 text-orange-600 text-xs">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <span>{DELETION_STATUS_LABELS[deletionStatus]}</span>
+          </span>
+        );
+      }
+      if (deletionStatus === 'failed') {
+        return (
+          <span className="flex items-center gap-1.5 text-red-600 text-xs">
+            <AlertCircle className="h-3.5 w-3.5" />
+            <span>Deletion Failed</span>
+          </span>
+        );
+      }
+    }
+
     const version = doc.latest_version;
     if (!version) return null;
 
@@ -326,10 +366,20 @@ export function Documents() {
     return null;
   };
 
-  // Check if document needs retry button
+  // Check if document needs retry button (processing or deletion failure)
   const needsRetry = (doc: Document) => {
     const version = doc.latest_version;
-    return version?.extraction_status === 'failed' || version?.upload_status === 'failed';
+    const deletionStatus = (doc as any).deletion_status;
+    return (
+      version?.extraction_status === 'failed' ||
+      version?.upload_status === 'failed' ||
+      deletionStatus === 'failed'
+    );
+  };
+
+  // Check if it's a deletion failure specifically
+  const isDeletionFailed = (doc: Document) => {
+    return (doc as any).deletion_status === 'failed';
   };
 
   return (
@@ -434,13 +484,17 @@ export function Documents() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        retryMutation.mutate(doc.id);
+                        if (isDeletionFailed(doc)) {
+                          retryDeletionMutation.mutate(doc.id);
+                        } else {
+                          retryMutation.mutate(doc.id);
+                        }
                       }}
-                      disabled={retryMutation.isPending}
+                      disabled={retryMutation.isPending || retryDeletionMutation.isPending}
                       className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                      title="Retry processing"
+                      title={isDeletionFailed(doc) ? 'Retry deletion' : 'Retry processing'}
                     >
-                      <RefreshCw className={`h-4 w-4 ${retryMutation.isPending ? 'animate-spin' : ''}`} />
+                      <RefreshCw className={`h-4 w-4 ${retryMutation.isPending || retryDeletionMutation.isPending ? 'animate-spin' : ''}`} />
                     </button>
                   )}
                   <button

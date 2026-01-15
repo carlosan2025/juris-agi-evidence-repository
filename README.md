@@ -34,6 +34,7 @@ make up-build
 docker-compose up --build -d
 ```
 
+
 This starts:
 - **API** at http://localhost:8000
 - **PostgreSQL + pgvector** at localhost:5432

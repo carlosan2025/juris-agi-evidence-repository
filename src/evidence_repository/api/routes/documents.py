@@ -191,20 +191,40 @@ async def list_documents(
     page: int = Query(default=1, ge=1, description="Page number"),
     page_size: int = Query(default=20, ge=1, le=100, description="Items per page"),
     include_deleted: bool = Query(default=False, description="Include soft-deleted documents"),
+    include_deleting: bool = Query(default=False, description="Include documents being deleted"),
     db: AsyncSession = Depends(get_db_session),
     user: User = Depends(get_current_user),
 ) -> PaginatedResponse[DocumentResponse]:
     """List documents with pagination."""
+    from evidence_repository.models.document import DeletionStatus
+
     # Build query
     query = select(Document).options(selectinload(Document.versions))
 
     if not include_deleted:
         query = query.where(Document.deleted_at.is_(None))
+        # Also filter out fully deleted documents
+        query = query.where(Document.deletion_status != DeletionStatus.DELETED)
+
+    if not include_deleting:
+        # Filter out documents being deleted (marked, deleting, or failed)
+        query = query.where(
+            Document.deletion_status.in_([DeletionStatus.ACTIVE, DeletionStatus.DELETION_FAILED])
+            if include_deleted
+            else Document.deletion_status == DeletionStatus.ACTIVE
+        )
 
     # Count total
     count_query = select(func.count()).select_from(Document)
     if not include_deleted:
         count_query = count_query.where(Document.deleted_at.is_(None))
+        count_query = count_query.where(Document.deletion_status != DeletionStatus.DELETED)
+    if not include_deleting:
+        count_query = count_query.where(
+            Document.deletion_status.in_([DeletionStatus.ACTIVE, DeletionStatus.DELETION_FAILED])
+            if include_deleted
+            else Document.deletion_status == DeletionStatus.ACTIVE
+        )
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
@@ -716,9 +736,25 @@ async def retry_document(
 
 @router.delete(
     "/{document_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Delete Document",
-    description="Permanently delete a document, cancel pending jobs, and remove files from storage.",
+    description="""
+Mark a document for deletion and queue the cascading delete process.
+
+**Safe Deletion Flow:**
+1. Document is marked as "marked_for_deletion"
+2. Deletion tasks are created for each resource (storage, embeddings, spans, etc.)
+3. Worker processes each task in dependency order
+4. Only after ALL resources are deleted, the document is marked as "deleted"
+5. If any task fails, document is marked as "failed" and can be retried
+
+This prevents orphaned data from network failures or partial deletions.
+
+**Returns:**
+- `status`: "deletion_queued" or error status
+- `task_count`: Number of deletion tasks created
+- `document_id`: The document being deleted
+    """,
 )
 async def delete_document(
     document_id: uuid.UUID,
@@ -726,9 +762,15 @@ async def delete_document(
     db: AsyncSession = Depends(get_db_session),
     storage: StorageBackend = Depends(get_storage),
     user: User = Depends(get_current_user),
-) -> None:
-    """Permanently delete a document, cancel any pending jobs, and remove files from storage."""
+) -> dict:
+    """Mark a document for deletion and queue the cascading delete process."""
     import logging
+    import httpx
+    import os
+    from evidence_repository.models.document import DeletionStatus
+    from evidence_repository.digestion.deletion import create_deletion_tasks
+
+    logger = logging.getLogger(__name__)
 
     result = await db.execute(
         select(Document)
@@ -743,16 +785,27 @@ async def delete_document(
             detail=f"Document {document_id} not found",
         )
 
-    # Get version IDs for this document
+    # Check if already being deleted or deleted
+    if document.deletion_status == DeletionStatus.DELETED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document has already been deleted",
+        )
+
+    if document.deletion_status in [DeletionStatus.MARKED_FOR_DELETION, DeletionStatus.DELETING_RESOURCES]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Document is already being deleted (status: {document.deletion_status.value})",
+        )
+
+    # Cancel any pending/running jobs for this document's versions
     version_ids = [str(v.id) for v in document.versions]
     canceled_jobs = 0
 
-    # Cancel any pending/running jobs for this document's versions
     try:
         from evidence_repository.models.job import Job, JobStatus
 
         if version_ids:
-            # Find jobs that reference these versions in their payload
             jobs_result = await db.execute(
                 select(Job).where(
                     Job.status.in_([JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING])
@@ -761,30 +814,20 @@ async def delete_document(
             jobs = jobs_result.scalars().all()
 
             for job in jobs:
-                # Check if job payload contains any of our version IDs
                 payload_version_id = job.payload.get("version_id") if job.payload else None
                 payload_document_id = job.payload.get("document_id") if job.payload else None
                 if payload_version_id in version_ids or payload_document_id == str(document_id):
                     job.status = JobStatus.CANCELED
                     job.error = f"Document {document_id} was deleted"
                     canceled_jobs += 1
-                    logging.info(f"Canceled job {job.id} for deleted document {document_id}")
+                    logger.info(f"Canceled job {job.id} for deleted document {document_id}")
     except Exception as e:
-        # Jobs table might not exist or other issue - log and continue
-        logging.warning(f"Could not cancel jobs for document {document_id}: {e}")
+        logger.warning(f"Could not cancel jobs for document {document_id}: {e}")
 
-    # Delete files from storage for each version
-    for version in document.versions:
-        try:
-            # Only attempt delete if storage_path is set
-            if version.storage_path:
-                file_uri = storage._key_to_uri(version.storage_path)
-                await storage.delete(file_uri)
-        except Exception as e:
-            # Log but continue - file might already be deleted or upload never completed
-            logging.warning(f"Failed to delete file {version.storage_path}: {e}")
+    # Create deletion tasks for all resources
+    tasks = await create_deletion_tasks(db, document, user.id)
 
-    # Write audit log for deletion
+    # Write audit log for deletion request
     try:
         await _write_audit_log(
             db=db,
@@ -796,15 +839,117 @@ async def delete_document(
                 "filename": document.filename,
                 "version_count": len(document.versions),
                 "canceled_jobs": canceled_jobs,
+                "deletion_tasks": len(tasks),
+                "status": "deletion_queued",
             },
             request=request,
         )
     except Exception as e:
-        logging.warning(f"Failed to write audit log for document {document_id} deletion: {e}")
+        logger.warning(f"Failed to write audit log for document {document_id} deletion: {e}")
 
-    # Hard delete from database (cascades to versions, spans, etc.)
-    await db.delete(document)
     await db.commit()
+
+    # Trigger deletion worker via fire-and-forget HTTP call
+    try:
+        base_url = os.environ.get("VERCEL_URL")
+        if base_url:
+            base_url = f"https://{base_url}"
+        else:
+            base_url = f"{request.url.scheme}://{request.url.netloc}"
+
+        api_key = request.headers.get("x-api-key", "")
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            try:
+                await client.post(
+                    f"{base_url}/api/v1/worker/process-deletion/{document_id}",
+                    headers={"x-api-key": api_key},
+                )
+            except httpx.TimeoutException:
+                pass  # Expected - we don't wait for completion
+            except Exception as e:
+                logger.warning(f"Fire-and-forget deletion trigger failed: {e}")
+    except Exception as e:
+        logger.warning(f"Could not trigger immediate deletion processing: {e}")
+
+    return {
+        "status": "deletion_queued",
+        "document_id": str(document_id),
+        "filename": document.original_filename,
+        "task_count": len(tasks),
+        "message": f"Document '{document.original_filename}' marked for deletion. {len(tasks)} tasks queued.",
+    }
+
+
+@router.get(
+    "/{document_id}/deletion-status",
+    summary="Get Deletion Status",
+    description="""
+Get detailed status of a document's deletion process.
+
+Returns:
+- Current deletion status
+- Task summary (total, completed, pending, failed)
+- Individual task details with status, error messages, retry counts
+    """,
+)
+async def get_deletion_status(
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Get detailed deletion status for a document."""
+    from evidence_repository.digestion.deletion import get_deletion_status as _get_deletion_status
+
+    result = await _get_deletion_status(db, document_id)
+
+    if "error" in result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=result["error"],
+        )
+
+    return result
+
+
+@router.post(
+    "/{document_id}/retry-deletion",
+    summary="Retry Failed Deletion",
+    description="""
+Retry deletion for a document with failed tasks.
+
+This will:
+1. Reset all failed deletion tasks to pending
+2. Re-trigger the deletion worker
+3. Continue processing from where it failed
+
+Only works for documents in "failed" or "marked" status.
+    """,
+)
+async def retry_document_deletion(
+    document_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+    storage: StorageBackend = Depends(get_storage),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Retry deletion for a document with failed tasks."""
+    import logging
+    import httpx
+    import os
+    from evidence_repository.digestion.deletion import retry_failed_deletion
+
+    logger = logging.getLogger(__name__)
+
+    result = await retry_failed_deletion(db, document_id, storage)
+
+    if "error" in result:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result["error"],
+        )
+
+    return result
 
 
 @router.get(

@@ -97,6 +97,22 @@ class SourceType(str, enum.Enum):
     UNKNOWN = "unknown"
 
 
+class DeletionStatus(str, enum.Enum):
+    """Status of document deletion process.
+
+    Deletion is a multi-step process that tracks each resource individually
+    to ensure complete cleanup and allow recovery from partial failures.
+
+    Flow: ACTIVE → MARKED → DELETING → DELETED (or FAILED)
+    """
+
+    ACTIVE = "active"  # Normal document, not marked for deletion
+    MARKED_FOR_DELETION = "marked"  # User requested deletion, tasks being created
+    DELETING_RESOURCES = "deleting"  # Actively deleting related resources
+    DELETION_FAILED = "failed"  # Deletion failed, can be retried
+    DELETED = "deleted"  # All resources deleted, record kept for audit
+
+
 class Document(Base, UUIDMixin, TimestampMixin):
     """Global document asset.
 
@@ -146,6 +162,18 @@ class Document(Base, UUIDMixin, TimestampMixin):
 
     # Soft delete support
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Safe deletion tracking (multi-step deletion with full audit trail)
+    deletion_status: Mapped[DeletionStatus] = mapped_column(
+        Enum(DeletionStatus, values_callable=lambda x: [e.value for e in x]),
+        default=DeletionStatus.ACTIVE,
+        nullable=False,
+        index=True,
+    )
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deletion_requested_by: Mapped[str | None] = mapped_column(String(100))  # User ID
+    deletion_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deletion_error: Mapped[str | None] = mapped_column(Text)  # Last error if failed
 
     # Relationships
     versions: Mapped[list["DocumentVersion"]] = relationship(

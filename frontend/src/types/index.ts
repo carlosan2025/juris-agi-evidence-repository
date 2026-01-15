@@ -27,7 +27,7 @@ export interface DocumentVersion {
   file_size: number;
   file_hash: string;
   upload_status: UploadStatus;
-  processing_status: ProcessingStatus;
+  processing_status: ProcessingStatus | null;
   extraction_status: ExtractionStatus;
   extraction_error: string | null;
   extracted_at: string | null;

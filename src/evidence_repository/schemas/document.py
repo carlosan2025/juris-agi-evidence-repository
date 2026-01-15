@@ -28,7 +28,7 @@ class DocumentVersionResponse(BaseSchema):
     upload_status: str = Field(
         default="uploaded", description="Upload status: pending, uploaded, or failed"
     )
-    processing_status: str = Field(
+    processing_status: str | None = Field(
         default="pending",
         description="Overall processing status: pending, uploaded, extracted, spans_built, embedded, facts_extracted, quality_checked, or failed"
     )
